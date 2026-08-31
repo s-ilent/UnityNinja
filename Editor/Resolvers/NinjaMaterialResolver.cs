@@ -255,8 +255,16 @@ namespace UnityNinja.Editor
 
         private static Texture2D LoadOrDecodeTexture(string path, string assetName, UnityEditor.AssetImporters.AssetImportContext ctx)
         {
+            // 1. Check if Unity AssetDatabase already has this texture imported (PNG, DDS, TGA, or overridden PVR)
+            var t = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            if (t != null)
+            {
+                ctx?.DependsOnSourceAsset(path);
+                return t;
+            }
+        
+            // 2. Only decode directly if AssetDatabase did not provide a Texture2D
             string ext = Path.GetExtension(path).ToLowerInvariant();
-
             if (ext is ".pvr" or ".dcpvr" or ".spvr")
             {
                 try
@@ -266,7 +274,6 @@ namespace UnityNinja.Editor
                     if (pvrTex != null)
                     {
                         ctx?.DependsOnSourceAsset(path);
-                        ctx?.AddObjectToAsset($"PVR_{assetName}", pvrTex);
                         return pvrTex;
                     }
                 }
@@ -275,14 +282,7 @@ namespace UnityNinja.Editor
                     Debug.LogWarning($"[NinjaMaterialResolver] Direct PVR decode failed for {path}: {ex.Message}");
                 }
             }
-
-            var t = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
-            if (t != null)
-            {
-                ctx?.DependsOnSourceAsset(path);
-                return t;
-            }
-
+        
             return null;
         }
 
