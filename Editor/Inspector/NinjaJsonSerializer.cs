@@ -26,13 +26,23 @@ namespace UnityNinja.Editor
 
             Type type = obj.GetType();
 
-            if (obj is string str) { writer.Write($"\"{str.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "")}\""); return; }
+            if (obj is string str)
+            {
+                writer.Write($"\"{str.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "")}\"");
+                return;
+            }
+
             if (type.IsPrimitive || obj is decimal)
             {
                 writer.Write(obj is bool b ? (b ? "true" : "false") : Convert.ToString(obj, System.Globalization.CultureInfo.InvariantCulture));
                 return;
             }
-            if (type.IsEnum) { writer.Write($"\"{obj}\""); return; }
+
+            if (type.IsEnum)
+            {
+                writer.Write($"\"{obj}\"");
+                return;
+            }
 
             if (obj is Vector3 v3)
             {
@@ -46,7 +56,7 @@ namespace UnityNinja.Editor
                 return;
             }
 
-            // Detect cycles for complex objects
+            // Prevent circular reference graph explosions
             if (!type.IsValueType && visited.Contains(obj))
             {
                 writer.Write("\"[Circular]\"");
@@ -104,7 +114,8 @@ namespace UnityNinja.Editor
             foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (!prop.CanRead || prop.GetIndexParameters().Length > 0) continue;
-                if (prop.Name is "Parent" or "Sibling" or "CodePath" or "Children") continue; // Avoid hierarchy tree redundancy
+                // Exclude parent/sibling/cycle properties
+                if (prop.Name is "Parent" or "Sibling" or "CodePath" or "HasWeight" or "Children") continue;
 
                 object val = null;
                 try { val = prop.GetValue(obj, null); } catch { continue; }
