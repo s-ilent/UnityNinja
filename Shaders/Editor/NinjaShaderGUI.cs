@@ -118,7 +118,7 @@ namespace UnityNinja.Editor
 
             if (alphaTestProp != null)
             {
-                materialEditor.ShaderProperty(alphaTestProp, "Enable Alpha Cutout");
+                // materialEditor.ShaderProperty(alphaTestProp, "Enable Alpha Cutout");
                 if (alphaTestProp.floatValue > 0.5f)
                 {
                     EditorGUI.indentLevel++;

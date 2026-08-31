@@ -344,12 +344,12 @@ namespace UnityNinja.Editor
         };
 
         private static Texture2D ResolveTexture(
-            int textureID,
-            string texName,
-            string modelFolder,
-            string assetName,
-            NinjaImportSettings settings,
-            UnityEditor.AssetImporters.AssetImportContext ctx)
+                    int textureID,
+                    string texName,
+                    string modelFolder,
+                    string assetName,
+                    NinjaImportSettings settings,
+                    UnityEditor.AssetImporters.AssetImportContext ctx)
         {
             if (settings?.TextureRemaps != null)
             {
@@ -358,6 +358,16 @@ namespace UnityNinja.Editor
                     if (remap.textureIndex == textureID && remap.overrideTexture != null)
                         return remap.overrideTexture;
                 }
+            }
+
+            // 0. Resolve from In-Memory Embedded Textures (CGM archive)
+            if (settings?.EmbeddedTextureMap != null && !string.IsNullOrEmpty(texName) && settings.EmbeddedTextureMap.TryGetValue(texName, out Texture2D mapTex) && mapTex != null)
+            {
+                return mapTex;
+            }
+            if (settings?.EmbeddedTextures != null && textureID >= 0 && textureID < settings.EmbeddedTextures.Count && settings.EmbeddedTextures[textureID] != null)
+            {
+                return settings.EmbeddedTextures[textureID];
             }
 
             List<string> candidateFolders = BuildCandidateFolders(modelFolder, settings?.MaterialSearchPath, settings?.TextureSearchPaths);
@@ -403,7 +413,7 @@ namespace UnityNinja.Editor
 
             return null;
         }
-
+                
         private static Texture2D LoadOrDecodeTexture(string path, string assetName, UnityEditor.AssetImporters.AssetImportContext ctx)
         {
             var t = AssetDatabase.LoadAssetAtPath<Texture2D>(path);

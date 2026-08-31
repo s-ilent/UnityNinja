@@ -38,6 +38,10 @@ namespace UnityNinja.Editor
         public List<MaterialRemapEntry> MaterialRemaps = new List<MaterialRemapEntry>();
         public List<TextureRemapEntry> TextureRemaps = new List<TextureRemapEntry>();
 
+        // In-Memory Embedded Textures (for CGMs)
+        public List<Texture2D> EmbeddedTextures = new List<Texture2D>();
+        public Dictionary<string, Texture2D> EmbeddedTextureMap = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
+
         // Transparency & Dreamcast OIT Emulation
         public bool TransparencyAsCoverage = false;
 

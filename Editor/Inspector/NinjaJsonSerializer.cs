@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
@@ -16,6 +17,15 @@ namespace UnityNinja.Editor
                 HashSet<object> visited = new HashSet<object>(new ReferenceComparer());
                 SerializeInternal(obj, sw, indentLevel, visited);
                 return sw.ToString();
+            }
+        }
+
+        public static void SerializeToFile(string filePath, object obj)
+        {
+            using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
+            using (var sw = new StreamWriter(fs, Encoding.UTF8, 65536))
+            {
+                sw.Write(Serialize(obj));
             }
         }
 
@@ -99,7 +109,6 @@ namespace UnityNinja.Editor
                 return;
             }
 
-            // Prevent circular reference graph explosions
             if (!type.IsValueType && visited.Contains(obj))
             {
                 writer.Write("\"[Circular]\"");
@@ -154,7 +163,6 @@ namespace UnityNinja.Editor
             string closeIndent = new string(' ', indentLevel * 2);
             bool firstMember = true;
 
-            // 1. Serialize Public Instance Fields
             foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (field.Name.StartsWith("m_") || field.Name is "Parent" or "Sibling" or "Children") continue;
@@ -168,7 +176,6 @@ namespace UnityNinja.Editor
                 SerializeInternal(val, writer, indentLevel + 1, visited);
             }
 
-            // 2. Serialize Public Instance Properties
             foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (!prop.CanRead || prop.GetIndexParameters().Length > 0) continue;

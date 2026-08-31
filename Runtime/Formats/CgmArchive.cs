@@ -7,16 +7,43 @@ using UnityNinja.IO;
 
 namespace UnityNinja
 {
+    [Serializable]
     public class CgmTextureEntry
     {
+        public int Index;
         public string Name;
         public int Width;
         public int Height;
         public PVRColorFormat ColorFormat;
         public PVRDataFormat DataFormat;
+        public int Offset;
+        public int Length;
         public byte[] RawData;
     }
 
+    [Serializable]
+    public class CgmLightEntry
+    {
+        public int Index;
+        public Vector3 Position;
+        public Vector3 Direction;
+        public float Near;
+        public float Far;
+        public Color Color = Color.white;
+        public int Offset;
+    }
+
+    [Serializable]
+    public class CgmUnknownChunkEntry
+    {
+        public int Index;
+        public string Tag;
+        public int Offset;
+        public int PayloadSize;
+        public byte[] RawData;
+    }
+
+    [Serializable]
     public class CgmModelEntry
     {
         public int Index;
@@ -24,6 +51,7 @@ namespace UnityNinja
         public string ModelName;
         public byte[] ModelBytes;
         public List<string> TexturesUsed = new List<string>();
+        public List<NJS_MOTION> EmbeddedMotions = new List<NJS_MOTION>();
         public NJS_OBJECT RootModel;
     }
 
@@ -31,6 +59,8 @@ namespace UnityNinja
     {
         public List<CgmTextureEntry> Textures { get; } = new List<CgmTextureEntry>();
         public List<CgmModelEntry> Models { get; } = new List<CgmModelEntry>();
+        public List<CgmLightEntry> Lights { get; } = new List<CgmLightEntry>();
+        public List<CgmUnknownChunkEntry> UnknownChunks { get; } = new List<CgmUnknownChunkEntry>();
 
         public static CgmArchive Load(byte[] data)
         {
@@ -93,15 +123,17 @@ namespace UnityNinja
 
                         var entry = new CgmTextureEntry
                         {
+                            Index = pvrIndex,
                             Name = texName,
                             Width = w,
                             Height = h,
                             ColorFormat = colFmt,
                             DataFormat = dataFmt,
+                            Offset = pos,
+                            Length = totalLen,
                             RawData = pvrSlice
                         };
 
-                        // Deduplicate: Keep higher resolution texture if repeated
                         if (!uniqueTextures.TryGetValue(texName, out var prev) || (w * h > prev.Width * prev.Height))
                         {
                             uniqueTextures[texName] = entry;
@@ -117,74 +149,78 @@ namespace UnityNinja
 
             Textures.AddRange(uniqueTextures.Values);
 
-            // 3. Scan & Merge NJTL + Model Chunks (NJCM / GJCM / NJBM + POF0)
+            // 3. Scan & Process Main Chunk Stream
             pos = 0;
             int modelIdx = 0;
+            int lightIdx = 0;
+            int unknownIdx = 0;
+
             byte[] activeNjtlBytes = null;
             List<string> activeNjtlNames = new List<string>();
 
             while (pos < data.Length - 8)
             {
-                string tag = Encoding.ASCII.GetString(data, pos, 4);
-
-                if (tag is "NJTL" or "GJTL")
+                var chunkInfo = GetChunkAt(data, pos);
+                if (chunkInfo == null)
                 {
-                    uint njtlLen = ByteConverter.ToUInt32(data, pos + 4);
-                    int njtlTotalLen = 8 + (int)njtlLen;
-
-                    int pofPos = pos + njtlTotalLen;
-                    int pofTotalLen = 0;
-                    if (pofPos + 8 <= data.Length && Encoding.ASCII.GetString(data, pofPos, 4) == "POF0")
-                    {
-                        uint pofLen = ByteConverter.ToUInt32(data, pofPos + 4);
-                        pofTotalLen = 8 + (int)pofLen;
-                    }
-
-                    int totalLen = njtlTotalLen + pofTotalLen;
-                    activeNjtlBytes = new byte[totalLen];
-                    Array.Copy(data, pos, activeNjtlBytes, 0, totalLen);
-
-                    byte[] payload = new byte[njtlLen];
-                    Array.Copy(data, pos + 8, payload, 0, njtlLen);
-                    activeNjtlNames = ParseNjtlNames(payload);
-
-                    pos += totalLen;
+                    pos++;
                     continue;
                 }
-                else if (tag is "NJCM" or "GJCM" or "NJBM")
+
+                string tag = chunkInfo.Tag;
+                int nextPos = chunkInfo.NextOffset;
+
+                // NJTL / GJTL
+                if (tag is "NJTL" or "GJTL")
                 {
-                    uint mdlLen = ByteConverter.ToUInt32(data, pos + 4);
-                    int mdlTotalLen = 8 + (int)mdlLen;
+                    byte[] payload = new byte[chunkInfo.PayloadLen];
+                    Array.Copy(chunkInfo.FullBytes, 8, payload, 0, chunkInfo.PayloadLen);
+                    activeNjtlNames = ParseNjtlNames(payload);
+                    activeNjtlBytes = chunkInfo.FullBytes;
+                    pos = nextPos;
+                    continue;
+                }
 
-                    int pofPos = pos + mdlTotalLen;
-                    int pofTotalLen = 0;
-                    if (pofPos + 8 <= data.Length && Encoding.ASCII.GetString(data, pofPos, 4) == "POF0")
-                    {
-                        uint pofLen = ByteConverter.ToUInt32(data, pofPos + 4);
-                        pofTotalLen = 8 + (int)pofLen;
-                    }
-
-                    int modelChunkTotalLen = mdlTotalLen + pofTotalLen;
-                    byte[] modelChunkBytes = new byte[modelChunkTotalLen];
-                    Array.Copy(data, pos, modelChunkBytes, 0, modelChunkTotalLen);
-
-                    byte[] mergedFileBytes;
+                // Canonical 3D Model Chunks ONLY (NJCM / GJCM / NJBM / XJCM)
+                if (tag is "NJCM" or "GJCM" or "NJBM" or "XJCM")
+                {
+                    List<byte> combinedModelBytes = new List<byte>();
                     List<string> texUsed = new List<string>();
 
                     if (activeNjtlBytes != null)
                     {
-                        mergedFileBytes = new byte[activeNjtlBytes.Length + modelChunkBytes.Length];
-                        Array.Copy(activeNjtlBytes, 0, mergedFileBytes, 0, activeNjtlBytes.Length);
-                        Array.Copy(modelChunkBytes, 0, mergedFileBytes, activeNjtlBytes.Length, modelChunkBytes.Length);
+                        combinedModelBytes.AddRange(activeNjtlBytes);
                         texUsed.AddRange(activeNjtlNames);
                         activeNjtlBytes = null;
                     }
-                    else
+
+                    combinedModelBytes.AddRange(chunkInfo.FullBytes);
+
+                    // Look ahead for trailing companion animation chunks (NMDM/NSSM)
+                    int lookPos = nextPos;
+
+                    while (lookPos < data.Length - 8)
                     {
-                        mergedFileBytes = modelChunkBytes;
+                        var nextInfo = GetChunkAt(data, lookPos);
+                        if (nextInfo == null) break;
+
+                        string nextTag = nextInfo.Tag;
+
+                        if (nextTag is "NMDM" or "NSSM" or "NLIM" or "NJCA")
+                        {
+                            combinedModelBytes.AddRange(nextInfo.FullBytes);
+                            lookPos = nextInfo.NextOffset;
+                        }
+                        else
+                        {
+                            break;
+                        }
                     }
 
-                    NinjaBinaryFile njFile = new NinjaBinaryFile(mergedFileBytes);
+                    nextPos = lookPos;
+
+                    byte[] mergedBytes = combinedModelBytes.ToArray();
+                    NinjaBinaryFile njFile = new NinjaBinaryFile(mergedBytes);
                     NJS_OBJECT rootObj = njFile.Models.Count > 0 ? njFile.Models[0] : null;
 
                     Models.Add(new CgmModelEntry
@@ -192,18 +228,137 @@ namespace UnityNinja
                         Index = modelIdx,
                         ChunkTag = tag,
                         ModelName = $"model_{modelIdx:000}",
-                        ModelBytes = mergedFileBytes,
+                        ModelBytes = mergedBytes,
                         TexturesUsed = texUsed,
+                        EmbeddedMotions = njFile.Motions,
                         RootModel = rootObj
                     });
 
                     modelIdx++;
-                    pos += modelChunkTotalLen;
+                    pos = nextPos;
+                    continue;
+                }
+
+                // Dynamic Light Chunk (NJLI)
+                if (tag == "NJLI")
+                {
+                    var light = ParseNjliLight(chunkInfo.FullBytes, pos, lightIdx++);
+                    if (light != null)
+                    {
+                        Lights.Add(light);
+                    }
+                    pos = nextPos;
+                    continue;
+                }
+
+                // Ignored parent sub-chunks
+                if (tag is "POF0" or "GBIX" or "PVRT" or "CGLC")
+                {
+                    pos = nextPos;
+                    continue;
+                }
+
+                // Standalone Unknown Blocks (e.g. CGMP, CGCL, CGSP, CGAL, CGAM, NCAM, CMCK)
+                if (IsAlphanumericTag(tag))
+                {
+                    UnknownChunks.Add(new CgmUnknownChunkEntry
+                    {
+                        Index = unknownIdx++,
+                        Tag = tag,
+                        Offset = pos,
+                        PayloadSize = chunkInfo.PayloadLen,
+                        RawData = chunkInfo.FullBytes
+                    });
+                    pos = nextPos;
                     continue;
                 }
 
                 pos++;
             }
+        }
+
+        private class RawChunkHeader
+        {
+            public string Tag;
+            public int PayloadLen;
+            public byte[] FullBytes;
+            public int NextOffset;
+        }
+
+        private static RawChunkHeader GetChunkAt(byte[] data, int offset)
+        {
+            if (offset > data.Length - 8) return null;
+
+            string tag = Encoding.ASCII.GetString(data, offset, 4);
+            uint payloadLen = ByteConverter.ToUInt32(data, offset + 4);
+
+            if (payloadLen > data.Length - (offset + 8)) return null;
+
+            int totalChunkLen = 8 + (int)payloadLen;
+            int pofPos = offset + totalChunkLen;
+            int pofTotalLen = 0;
+
+            if (pofPos + 8 <= data.Length && Encoding.ASCII.GetString(data, pofPos, 4) == "POF0")
+            {
+                uint pofLen = ByteConverter.ToUInt32(data, pofPos + 4);
+                if (pofLen <= data.Length - (pofPos + 8))
+                {
+                    pofTotalLen = 8 + (int)pofLen;
+                }
+            }
+
+            int fullLen = totalChunkLen + pofTotalLen;
+            byte[] fullBytes = new byte[fullLen];
+            Array.Copy(data, offset, fullBytes, 0, fullLen);
+
+            return new RawChunkHeader
+            {
+                Tag = tag,
+                PayloadLen = (int)payloadLen,
+                FullBytes = fullBytes,
+                NextOffset = offset + fullLen
+            };
+        }
+
+        private static CgmLightEntry ParseNjliLight(byte[] chunkBytes, int offset, int index)
+        {
+            if (chunkBytes.Length < 0x158) return null;
+
+            float px = ByteConverter.ToSingle(chunkBytes, 0x40 + 8);
+            float py = ByteConverter.ToSingle(chunkBytes, 0x44 + 8);
+            float pz = ByteConverter.ToSingle(chunkBytes, 0x48 + 8);
+
+            float vx = ByteConverter.ToSingle(chunkBytes, 0x4C + 8);
+            float vy = ByteConverter.ToSingle(chunkBytes, 0x50 + 8);
+            float vz = ByteConverter.ToSingle(chunkBytes, 0x54 + 8);
+
+            float nearVal = ByteConverter.ToSingle(chunkBytes, 0x134 + 8);
+            float farVal = ByteConverter.ToSingle(chunkBytes, 0x138 + 8);
+
+            float r = ByteConverter.ToSingle(chunkBytes, 0x14C + 8);
+            float g = ByteConverter.ToSingle(chunkBytes, 0x150 + 8);
+            float b = ByteConverter.ToSingle(chunkBytes, 0x154 + 8);
+
+            return new CgmLightEntry
+            {
+                Index = index,
+                Position = new Vector3(px, py, pz),
+                Direction = new Vector3(vx, vy, vz),
+                Near = nearVal,
+                Far = farVal,
+                Color = new Color(Mathf.Clamp01(r), Mathf.Clamp01(g), Mathf.Clamp01(b), 1.0f),
+                Offset = offset
+            };
+        }
+
+        private static bool IsAlphanumericTag(string tag)
+        {
+            if (string.IsNullOrEmpty(tag) || tag.Length != 4) return false;
+            foreach (char c in tag)
+            {
+                if (!char.IsLetterOrDigit(c) && c != '_') return false;
+            }
+            return true;
         }
 
         private static List<string> ParseNjtlNames(byte[] chunkBytes)

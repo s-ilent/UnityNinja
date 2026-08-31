@@ -9,7 +9,7 @@ using UnityNinja.IO;
 
 namespace UnityNinja.Editor
 {
-    [ScriptedImporter(1, new[] { "cgm" })]
+    [ScriptedImporter(2, new[] { "cgm" })]
     public class NinjaCGMImporter : ScriptedImporter
     {
         [Header("Transform")]
@@ -18,6 +18,14 @@ namespace UnityNinja.Editor
         [Header("Physics")]
         public bool m_GenerateMeshColliders = false;
 
+        [Header("Materials")]
+        public bool m_ImportMaterials = true;
+        public bool m_DeduplicateMaterials = true;
+        public bool m_TransparencyAsCoverage = false;
+
+        [Header("Animation")]
+        public bool m_ImportAnimation = true;
+
         public override void OnImportAsset(AssetImportContext ctx)
         {
             string assetName = Path.GetFileNameWithoutExtension(ctx.assetPath);
@@ -25,65 +33,91 @@ namespace UnityNinja.Editor
             try
             {
                 byte[] rawData = File.ReadAllBytes(ctx.assetPath);
+                CgmArchive archive = CgmArchive.Load(rawData);
+
                 GameObject rootGO = new GameObject(assetName);
-
-                // 1. Parse all embedded PVR textures (GBIX + PVRT)
-                List<Texture2D> embeddedTextures = new List<Texture2D>();
-                int pos = 0;
-                while (pos < rawData.Length - 8)
-                {
-                    if (rawData[pos] == 'G' && rawData[pos+1] == 'B' && rawData[pos+2] == 'I' && rawData[pos+3] == 'X')
-                    {
-                        uint gbixLen = ByteConverter.ToUInt32(rawData, pos + 4);
-                        int pvrtPos = pos + 8 + (int)gbixLen;
-                        if (pvrtPos + 8 <= rawData.Length && rawData[pvrtPos] == 'P' && rawData[pvrtPos+1] == 'V' && rawData[pvrtPos+2] == 'R' && rawData[pvrtPos+3] == 'T')
-                        {
-                            uint pvrtLen = ByteConverter.ToUInt32(rawData, pvrtPos + 4);
-                            int totalLen = 8 + (int)gbixLen + 8 + (int)pvrtLen;
-
-                            byte[] pvrSlice = new byte[totalLen];
-                            Array.Copy(rawData, pos, pvrSlice, 0, totalLen);
-
-                            Texture2D tex = PVRTextureDecoder.DecodePVR(pvrSlice, $"Texture_{embeddedTextures.Count:00}");
-                            if (tex != null)
-                            {
-                                ctx.AddObjectToAsset($"Texture_{embeddedTextures.Count:00}", tex);
-                                embeddedTextures.Add(tex);
-                            }
-                            pos += totalLen;
-                            continue;
-                        }
-                    }
-                    pos++;
-                }
-
-                // 2. Parse Ninja Binary Models inside archive
-                NinjaBinaryFile njFile = new NinjaBinaryFile(rawData, ModelFormat.Chunk);
 
                 var settings = new NinjaImportSettings
                 {
                     Scale = m_Scale,
                     GenerateMeshColliders = m_GenerateMeshColliders,
-                    ImportMaterials = true
+                    ImportMaterials = m_ImportMaterials,
+                    DeduplicateMaterials = m_DeduplicateMaterials,
+                    TransparencyAsCoverage = m_TransparencyAsCoverage,
+                    ImportAnimation = m_ImportAnimation
                 };
 
-                for (int m = 0; m < njFile.Models.Count; m++)
+                // 1. Decode and embed all PVR textures into AssetImportContext & settings map
+                for (int t = 0; t < archive.Textures.Count; t++)
                 {
-                    NJS_OBJECT model = njFile.Models[m];
-                    string[] texNames = (njFile.Texnames != null && m < njFile.Texnames.Count) ? njFile.Texnames[m] : null;
+                    var texEntry = archive.Textures[t];
+                    Texture2D tex = PVRTextureDecoder.DecodePVR(texEntry.RawData, texEntry.Name);
+                    if (tex != null)
+                    {
+                        ctx.AddObjectToAsset($"Texture_{texEntry.Index:00}_{texEntry.Name}", tex);
+                        settings.EmbeddedTextures.Add(tex);
+                        settings.EmbeddedTextureMap[texEntry.Name] = tex;
+                    }
+                }
+
+                // 2. Build Sub-Models with embedded motions and direct texture binding
+                for (int m = 0; m < archive.Models.Count; m++)
+                {
+                    var modelEntry = archive.Models[m];
+                    if (modelEntry.RootModel == null) continue;
+
+                    string[] texNames = modelEntry.TexturesUsed?.ToArray();
 
                     GameObject subModelGO = NinjaObjectResolver.ResolveHierarchy(
-                        model,
-                        $"Model_{m:00}_{model.Name}",
+                        modelEntry.RootModel,
+                        $"{modelEntry.ModelName}_{modelEntry.RootModel.Name}",
                         settings,
                         texNames,
                         ctx,
-                        out _
+                        out List<Transform> nodeTransforms
                     );
 
                     if (subModelGO != null)
                     {
                         subModelGO.transform.SetParent(rootGO.transform, false);
+
+                        if (settings.ImportAnimation && modelEntry.EmbeddedMotions != null && modelEntry.EmbeddedMotions.Count > 0)
+                        {
+                            NinjaAnimatorResolver.SetupModelAnimations(
+                                modelEntry.RootModel,
+                                subModelGO,
+                                nodeTransforms,
+                                modelEntry.EmbeddedMotions,
+                                modelEntry.ModelName,
+                                ctx.assetPath,
+                                settings.Scale,
+                                ctx
+                            );
+                        }
+                    }
+                }
+
+                // 3. Build Scene Dynamic Lights (NJLI)
+                if (archive.Lights.Count > 0)
+                {
+                    GameObject lightsContainer = new GameObject("Dynamic_Lights");
+                    lightsContainer.transform.SetParent(rootGO.transform, false);
+
+                    foreach (var light in archive.Lights)
+                    {
+                        GameObject lightGO = new GameObject($"Light_{light.Index:000}");
+                        lightGO.transform.SetParent(lightsContainer.transform, false);
+
+                        lightGO.transform.localPosition = NinjaCoordinateUtility.ToUnityPosition(light.Position, m_Scale);
+                        if (light.Direction != Vector3.zero)
+                        {
+                            lightGO.transform.forward = -NinjaCoordinateUtility.ToUnityNormal(light.Direction);
+                        }
+
+                        Light lComp = lightGO.AddComponent<Light>();
+                        lComp.type = (light.Direction != Vector3.zero) ? LightType.Directional : LightType.Point;
+                        lComp.color = light.Color;
+                        lComp.range = Mathf.Max(1.0f, light.Far * m_Scale);
                     }
                 }
 
@@ -92,7 +126,7 @@ namespace UnityNinja.Editor
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[NinjaCGMImporter] Failed importing CGM archive {ctx.assetPath}:\n{ex}");
+                Debug.LogError($"[NinjaCGMImporter] Failed importing CGM archive {ctx.assetPath}: {ex}");
             }
         }
     }

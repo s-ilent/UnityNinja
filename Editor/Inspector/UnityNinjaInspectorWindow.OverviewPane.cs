@@ -21,26 +21,37 @@ namespace UnityNinja.Editor
 
             EditorGUILayout.Space(4);
 
-            if (m_Context.RootModel != null)
+            if (m_Context.CgmData != null)
             {
-                DrawRow("Model Format", $"{m_Context.NinjaFile?.Format ?? ModelFormat.Basic}");
-                DrawRow("Total Nodes", $"{m_Context.RootModel.CountAll()}");
-                DrawRow("Animated Nodes", $"{m_Context.RootModel.CountAnimated()}");
-                DrawRow("Total Vertices", $"{m_Context.RootModel.CountAllVertices()}");
+                DrawRow("Asset Type", "CGM Archive");
+                DrawRow("Models", $"{m_Context.CgmData.Models.Count}");
+                DrawRow("Textures", $"{m_Context.CgmData.Textures.Count}");
+                DrawRow("Dynamic Lights", $"{m_Context.CgmData.Lights.Count}");
+                DrawRow("Unknown Blocks", $"{m_Context.CgmData.UnknownChunks.Count}");
             }
-
-            if (m_Context.MainMotion != null)
+            else
             {
-                DrawRow("Motion Frames", $"{m_Context.MainMotion.Frames}");
-                DrawRow("Model Parts", $"{m_Context.MainMotion.ModelParts}");
-                DrawRow("Interpolation", $"{m_Context.MainMotion.InterpolationMode}");
-            }
+                if (m_Context.RootModel != null)
+                {
+                    DrawRow("Model Format", $"{m_Context.NinjaFile?.Format ?? ModelFormat.Basic}");
+                    DrawRow("Total Nodes", $"{m_Context.RootModel.CountAll()}");
+                    DrawRow("Animated Nodes", $"{m_Context.RootModel.CountAnimated()}");
+                    DrawRow("Total Vertices", $"{m_Context.RootModel.CountAllVertices()}");
+                }
 
-            if (m_Context.LevelData != null)
-            {
-                DrawRow("COL Entries", $"{m_Context.LevelData.COLList.Count}");
-                DrawRow("GeoAnims", $"{m_Context.LevelData.AnimList.Count}");
-                DrawRow("Far Clip", $"{m_Context.LevelData.FarClipping:F0}m");
+                if (m_Context.MainMotion != null)
+                {
+                    DrawRow("Motion Frames", $"{m_Context.MainMotion.Frames}");
+                    DrawRow("Model Parts", $"{m_Context.MainMotion.ModelParts}");
+                    DrawRow("Interpolation", $"{m_Context.MainMotion.InterpolationMode}");
+                }
+
+                if (m_Context.LevelData != null)
+                {
+                    DrawRow("COL Entries", $"{m_Context.LevelData.COLList.Count}");
+                    DrawRow("GeoAnims", $"{m_Context.LevelData.AnimList.Count}");
+                    DrawRow("Far Clip", $"{m_Context.LevelData.FarClipping:F0}m");
+                }
             }
 
             EditorGUILayout.Space(6);
@@ -57,7 +68,7 @@ namespace UnityNinja.Editor
 
             switch (m_SelectedTab)
             {
-                case 0: // Node Tree
+                case 0:
                     if (m_Context.RootModel != null)
                     {
                         var nodeList = new List<object>();
@@ -76,7 +87,7 @@ namespace UnityNinja.Editor
                     }
                     break;
 
-                case 1: // Meshes
+                case 1:
                     if (m_Context.RootModel != null)
                     {
                         var meshList = new List<object>();
@@ -88,7 +99,7 @@ namespace UnityNinja.Editor
                     }
                     break;
 
-                case 2: // Materials across all attach formats
+                case 2:
                     if (m_Context.RootModel != null)
                     {
                         var matList = new List<object>();
@@ -113,16 +124,20 @@ namespace UnityNinja.Editor
                     }
                     break;
 
-                case 3: // Motion
+                case 3:
                     targetObj = m_Context.MainMotion;
                     break;
 
-                case 4: // LandTable
+                case 4:
                     targetObj = m_Context.LevelData;
+                    break;
+
+                case 5:
+                    targetObj = m_Context.CgmData;
                     break;
             }
 
-            targetObj ??= m_Context.RootModel ?? (object)m_Context.MainMotion ?? m_Context.LevelData;
+            targetObj ??= m_Context.CgmData ?? m_Context.RootModel ?? (object)m_Context.MainMotion ?? m_Context.LevelData;
 
             m_DumpedJsonText = NinjaJsonSerializer.Serialize(targetObj);
             GUIUtility.systemCopyBuffer = m_DumpedJsonText;

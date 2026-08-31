@@ -14,10 +14,12 @@ namespace UnityNinja.Editor
         public NJS_OBJECT RootModel;
         public NJS_MOTION MainMotion;
         public LandTable LevelData;
+        public CgmArchive CgmData;
 
         public bool IsModel => RootModel != null;
         public bool IsMotion => MainMotion != null;
         public bool IsLandTable => LevelData != null;
+        public bool IsCgm => CgmData != null;
     }
 
     public partial class UnityNinjaInspectorWindow : EditorWindow
@@ -33,12 +35,11 @@ namespace UnityNinja.Editor
         private string m_DumpedJsonText = "";
         private bool m_ShowJsonOutput = false;
 
-        private readonly string[] m_TabNames = new[] {
+        private readonly string[] m_ModelTabNames = new[] {
             "Node Tree",
             "Meshes & Vertices",
             "Materials & GX",
-            "Motion & Keyframes",
-            "LandTable & Stage"
+            "Motion & Keyframes"
         };
 
         [MenuItem("Window/UnityNinja/Data Inspector")]
@@ -79,7 +80,11 @@ namespace UnityNinja.Editor
             {
                 byte[] raw = File.ReadAllBytes(path);
 
-                if (ext is ".sa1lvl" or ".sa2lvl" or ".sa2blvl" or ".salvl")
+                if (ext == ".cgm")
+                {
+                    m_Context.CgmData = CgmArchive.Load(raw);
+                }
+                else if (ext is ".sa1lvl" or ".sa2lvl" or ".sa2blvl" or ".salvl")
                 {
                     int headerAddr = (raw.Length >= 16) ? BitConverter.ToInt32(raw, 8) : 0;
                     ModelFormat fmt = ext switch { ".sa2lvl" => ModelFormat.Chunk, ".sa2blvl" => ModelFormat.GC, _ => ModelFormat.Basic };
@@ -102,7 +107,6 @@ namespace UnityNinja.Editor
                     if (m_Context.NinjaFile.Motions.Count > 0)
                         m_Context.MainMotion = m_Context.NinjaFile.Motions[0];
 
-                    // If no embedded motion, search for companion animation files in same directory
                     if (m_Context.MainMotion == null && !string.IsNullOrEmpty(baseDir) && Directory.Exists(baseDir))
                     {
                         string[] motionExts = { ".njm", ".gjm", ".xjm", ".nam" };
@@ -147,9 +151,9 @@ namespace UnityNinja.Editor
             m_SelectedAsset = EditorGUILayout.ObjectField("Target Ninja Asset", m_SelectedAsset, typeof(UnityEngine.Object), true);
             if (EditorGUI.EndChangeCheck()) LoadAsset();
 
-            if (!m_Context.IsModel && !m_Context.IsMotion && !m_Context.IsLandTable)
+            if (!m_Context.IsModel && !m_Context.IsMotion && !m_Context.IsLandTable && !m_Context.IsCgm)
             {
-                EditorGUILayout.HelpBox("Select a Ninja asset (.nj, .gj, .xj, .njm, .gjm, .sa1lvl, .sa2lvl) in the Project window.", MessageType.Info);
+                EditorGUILayout.HelpBox("Select a Ninja asset (.nj, .gj, .xj, .cgm, .njm, .gjm, .sa1lvl, .sa2lvl) in the Project window.", MessageType.Info);
                 return;
             }
 
@@ -160,16 +164,32 @@ namespace UnityNinja.Editor
             // 1. Main Left Content Pane
             EditorGUILayout.BeginVertical();
 
-            m_SelectedTab = GUILayout.Toolbar(m_SelectedTab, m_TabNames, EditorStyles.toolbarButton);
-            EditorGUILayout.Space(4);
+            // Only draw model category tabs when inspecting a 3D model hierarchy
+            if (m_Context.IsModel && !m_UseDebugView)
+            {
+                m_SelectedTab = GUILayout.Toolbar(Mathf.Clamp(m_SelectedTab, 0, m_ModelTabNames.Length - 1), m_ModelTabNames, EditorStyles.toolbarButton);
+                EditorGUILayout.Space(4);
+            }
 
             m_MainScrollPosition = EditorGUILayout.BeginScrollView(m_MainScrollPosition);
 
             if (m_UseDebugView)
             {
-                NinjaReflectionDrawer.DrawObjectReflectively(m_Context.RootModel ?? (object)m_Context.MainMotion ?? m_Context.LevelData, "Raw Object Data");
+                NinjaReflectionDrawer.DrawObjectReflectively(m_Context.RootModel ?? (object)m_Context.MainMotion ?? (object)m_Context.LevelData ?? m_Context.CgmData, "Raw Object Data");
             }
-            else
+            else if (m_Context.IsCgm)
+            {
+                DrawCgmTab();
+            }
+            else if (m_Context.IsLandTable)
+            {
+                DrawLandTableTab();
+            }
+            else if (m_Context.IsMotion && !m_Context.IsModel)
+            {
+                DrawMotionTab();
+            }
+            else if (m_Context.IsModel)
             {
                 switch (m_SelectedTab)
                 {
@@ -177,7 +197,6 @@ namespace UnityNinja.Editor
                     case 1: DrawMeshesTab(); break;
                     case 2: DrawMaterialsTab(); break;
                     case 3: DrawMotionTab(); break;
-                    case 4: DrawLandTableTab(); break;
                 }
             }
 
@@ -197,7 +216,7 @@ namespace UnityNinja.Editor
             EditorGUILayout.EndScrollView();
             EditorGUILayout.EndVertical();
 
-            // 2. Right Persistent Metrics Overview Pane (Width 280px)
+            // 2. Right Persistent Metrics Overview Pane
             EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(280));
             m_RightPaneScrollPosition = EditorGUILayout.BeginScrollView(m_RightPaneScrollPosition, false, false);
             DrawOverviewPane();

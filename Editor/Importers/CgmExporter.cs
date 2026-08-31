@@ -64,6 +64,8 @@ namespace UnityNinja.Editor
 
                 int pngCount = 0;
                 int modelCount = 0;
+                int lightCount = 0;
+                int unknownCount = 0;
 
                 // 1. Export decoded textures as PNG & raw PVR
                 foreach (var texEntry in archive.Textures)
@@ -73,13 +75,13 @@ namespace UnityNinja.Editor
                     if (tex != null)
                     {
                         byte[] pngBytes = tex.EncodeToPNG();
-                        string pngPath = Path.Combine(targetDir, $"{baseName}.png");
+                        string pngPath = Path.Combine(targetDir, baseName + ".png");
                         File.WriteAllBytes(pngPath, pngBytes);
                         pngCount++;
                         UnityEngine.Object.DestroyImmediate(tex);
                     }
 
-                    string pvrPath = Path.Combine(targetDir, $"{baseName}.pvr");
+                    string pvrPath = Path.Combine(targetDir, baseName + ".pvr");
                     File.WriteAllBytes(pvrPath, texEntry.RawData);
                 }
 
@@ -87,23 +89,69 @@ namespace UnityNinja.Editor
                 foreach (var mdlEntry in archive.Models)
                 {
                     string ext = mdlEntry.ChunkTag == "GJCM" ? "gj" : "nj";
-                    string modelFileName = $"{mdlEntry.ModelName}.{ext}";
+                    string modelFileName = mdlEntry.ModelName + "." + ext;
                     string modelPath = Path.Combine(targetDir, modelFileName);
 
                     File.WriteAllBytes(modelPath, mdlEntry.ModelBytes);
                     modelCount++;
                 }
 
-                // 3. Write manifest.json
+                // 3. Export Dynamic Lights as Prefab & JSON
+                if (archive.Lights.Count > 0)
+                {
+                    GameObject lightsRootGO = new GameObject("Scene_Lights");
+                    try
+                    {
+                        foreach (var lightEntry in archive.Lights)
+                        {
+                            GameObject lightGO = new GameObject($"Light_{lightEntry.Index:000}");
+                            lightGO.transform.SetParent(lightsRootGO.transform, false);
+                            lightGO.transform.localPosition = NinjaCoordinateUtility.ToUnityPosition(lightEntry.Position, 0.1f);
+                            if (lightEntry.Direction != Vector3.zero)
+                            {
+                                lightGO.transform.forward = -NinjaCoordinateUtility.ToUnityNormal(lightEntry.Direction);
+                            }
+
+                            Light l = lightGO.AddComponent<Light>();
+                            l.type = (lightEntry.Direction != Vector3.zero) ? LightType.Directional : LightType.Point;
+                            l.color = lightEntry.Color;
+                            l.range = Mathf.Max(1.0f, lightEntry.Far * 0.1f);
+                        }
+
+                        string lightsRelPath = GetRelativeAssetPath(Path.Combine(targetDir, "Scene_Lights.prefab"));
+                        if (!string.IsNullOrEmpty(lightsRelPath))
+                        {
+                            PrefabUtility.SaveAsPrefabAsset(lightsRootGO, lightsRelPath);
+                            lightCount = archive.Lights.Count;
+                        }
+                    }
+                    finally
+                    {
+                        UnityEngine.Object.DestroyImmediate(lightsRootGO);
+                    }
+                }
+
+                // 4. Export Unknown Chunks
+                foreach (var unk in archive.UnknownChunks)
+                {
+                    string unkFileName = $"unknown_{unk.Index:000}_{unk.Tag}.bin";
+                    string unkPath = Path.Combine(targetDir, unkFileName);
+                    File.WriteAllBytes(unkPath, unk.RawData);
+                    unknownCount++;
+                }
+
+                // 5. Write manifest.json
                 string manifestPath = Path.Combine(targetDir, "manifest.json");
-                File.WriteAllText(manifestPath, NinjaJsonSerializer.Serialize(archive));
+                NinjaJsonSerializer.SerializeToFile(manifestPath, archive);
 
                 EditorUtility.DisplayDialog(
                     "CGM Extraction Complete",
-                    $"Successfully extracted {Path.GetFileName(assetPath)}:\n" +
-                    $"• Destination: {folderName}/\n" +
-                    $"• Textures Converted (PNG + PVR): {pngCount}\n" +
-                    $"• Merged Models (.nj/.gj): {modelCount}",
+                    "Successfully extracted " + Path.GetFileName(assetPath) + ":\n" +
+                    "• Destination: " + folderName + "/\n" +
+                    "• Textures Converted (PNG + PVR): " + pngCount + "\n" +
+                    "• Standalone Models (.nj/.gj): " + modelCount + "\n" +
+                    "• Scene Lights Saved: " + lightCount + "\n" +
+                    "• Unknown Blocks: " + unknownCount,
                     "OK"
                 );
             }
@@ -120,6 +168,18 @@ namespace UnityNinja.Editor
             if (Path.IsPathRooted(assetPath)) return assetPath.Replace('\\', '/');
             string projectRoot = Application.dataPath.Substring(0, Application.dataPath.Length - 6);
             return Path.Combine(projectRoot, assetPath).Replace('\\', '/');
+        }
+
+        private static string GetRelativeAssetPath(string absolutePath)
+        {
+            if (string.IsNullOrEmpty(absolutePath)) return "";
+            string dataPath = Application.dataPath.Replace('\\', '/');
+            string norm = absolutePath.Replace('\\', '/');
+            if (norm.StartsWith(dataPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return "Assets" + norm.Substring(dataPath.Length);
+            }
+            return "";
         }
     }
 }
