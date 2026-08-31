@@ -332,19 +332,35 @@ namespace UnityNinja.Editor
 
             foreach (var pc in resolvedPolyChunks)
             {
-                if (pc is PolyChunkTinyTextureID tid)
+                if (pc is PolyChunkBitsBlendAlpha blendChunk)
+                {
+                    currentMaterialState.SourceAlpha = blendChunk.SourceAlpha;
+                    currentMaterialState.DestinationAlpha = blendChunk.DestinationAlpha;
+                    currentMaterialState.UseAlpha = true;
+                }
+                else if (pc is PolyChunkTinyTextureID tid)
                 {
                     currentMaterialState.TextureID = tid.TextureID;
                     currentMaterialIndex = tid.TextureID;
+                    currentMaterialState.ClampU = tid.ClampU;
+                    currentMaterialState.ClampV = tid.ClampV;
+                    currentMaterialState.FlipU = tid.FlipU;
+                    currentMaterialState.FlipV = tid.FlipV;
                 }
                 else if (pc is PolyChunkMaterial matChunk)
                 {
                     if (matChunk.Diffuse.HasValue) currentMaterialState.DiffuseColor = matChunk.Diffuse.Value;
+                    if (matChunk.Specular.HasValue) currentMaterialState.SpecularColor = matChunk.Specular.Value;
+                    if (matChunk.SpecularExponent > 0) currentMaterialState.Exponent = matChunk.SpecularExponent;
                     currentMaterialState.SourceAlpha = matChunk.SourceAlpha;
                     currentMaterialState.DestinationAlpha = matChunk.DestinationAlpha;
                 }
                 else if (pc is PolyChunkStrip stripChunk)
                 {
+                    currentMaterialState.DoubleSided = stripChunk.DoubleSided;
+                    currentMaterialState.IgnoreLighting = stripChunk.IgnoreLighting;
+                    if (stripChunk.UseAlpha) currentMaterialState.UseAlpha = true;
+
                     foreach (var strip in stripChunk.Strips)
                     {
                         if (strip.Indexes == null || strip.Indexes.Length < 3) continue;
@@ -562,16 +578,24 @@ namespace UnityNinja.Editor
                     else if (param.Type == ParameterType.Texture)
                     {
                         matState.TextureID = param.TextureID;
+                        matState.ClampU = (param.TileMode & GCTileMode.WrapU) == 0;
+                        matState.ClampV = (param.TileMode & GCTileMode.WrapV) == 0;
+                        matState.FlipU = (param.TileMode & GCTileMode.MirrorU) != 0;
+                        matState.FlipV = (param.TileMode & GCTileMode.MirrorV) != 0;
                     }
                     else if (param.Type == ParameterType.DiffuseColor)
                     {
                         matState.DiffuseColor = param.Color;
                     }
+                    else if (param.Type == ParameterType.SpecularColor)
+                    {
+                        matState.SpecularColor = param.Color;
+                    }
                     else if (param.Type == ParameterType.BlendAlpha)
                     {
                         matState.SourceAlpha = param.SourceAlpha;
                         matState.DestinationAlpha = param.DestAlpha;
-                        matState.Flags |= 0x100000;
+                        matState.UseAlpha = true;
                     }
                 }
 

@@ -204,13 +204,21 @@ namespace UnityNinja.Editor
                     if (mat.DiffuseColor.r != 255 || mat.DiffuseColor.g != 255 || mat.DiffuseColor.b != 255)
                         colorSuffix += $"_D_{mat.DiffuseColor.r}_{mat.DiffuseColor.g}_{mat.DiffuseColor.b}";
                     if (mat.UseAlpha)
-                        colorSuffix += "_Alpha";
+                        colorSuffix += $"_Alpha_{mat.SourceAlpha}_{mat.DestinationAlpha}";
                     if (mat.DoubleSided)
                         colorSuffix += "_Double";
                     if (mat.IgnoreLighting)
                         colorSuffix += "_Unlit";
                     if (mat.EnvironmentMap)
                         colorSuffix += "_Env";
+                    if (mat.ClampU)
+                        colorSuffix += "_ClampU";
+                    if (mat.ClampV)
+                        colorSuffix += "_ClampV";
+                    if (mat.FlipU)
+                        colorSuffix += "_FlipU";
+                    if (mat.FlipV)
+                        colorSuffix += "_FlipV";
                 }
 
                 return namingMode switch
@@ -257,7 +265,7 @@ namespace UnityNinja.Editor
             mat.SetFloat("_Shininess", Mathf.Clamp01(ninjaMat.Exponent / 64.0f));
             mat.SetFloat("_MaterialFlags", (float)ninjaMat.Flags);
 
-            // 2. Texture Resolution
+            // 2. Texture Resolution & UV Wrapping
             Texture2D tex = ResolveTexture(ninjaMat.TextureID, texName, modelFolder, assetName, settings, ctx);
             if (tex != null)
             {
@@ -266,6 +274,10 @@ namespace UnityNinja.Editor
             }
 
             // 3. Flags & States
+            mat.SetFloat("_ClampU", ninjaMat.ClampU ? 1.0f : 0.0f);
+            mat.SetFloat("_ClampV", ninjaMat.ClampV ? 1.0f : 0.0f);
+            mat.SetFloat("_FlipU", ninjaMat.FlipU ? 1.0f : 0.0f);
+            mat.SetFloat("_FlipV", ninjaMat.FlipV ? 1.0f : 0.0f);
             mat.SetFloat("_Unlit", ninjaMat.IgnoreLighting ? 1.0f : 0.0f);
             mat.SetFloat("_UseEnvMap", ninjaMat.EnvironmentMap ? 1.0f : 0.0f);
             mat.SetInt("_Cull", ninjaMat.DoubleSided ? (int)UnityEngine.Rendering.CullMode.Off : (int)UnityEngine.Rendering.CullMode.Back);
@@ -276,12 +288,28 @@ namespace UnityNinja.Editor
                 UnityEngine.Rendering.BlendMode srcBlend = MapAlphaInstruction(ninjaMat.SourceAlpha, UnityEngine.Rendering.BlendMode.SrcAlpha);
                 UnityEngine.Rendering.BlendMode dstBlend = MapAlphaInstruction(ninjaMat.DestinationAlpha, UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
 
-                bool isAdditive = (dstBlend == UnityEngine.Rendering.BlendMode.One);
-                mat.SetFloat("_Mode", isAdditive ? 4.0f : 2.0f); // 4 = Additive, 2 = Transparent
+                if (dstBlend == UnityEngine.Rendering.BlendMode.One)
+                {
+                    mat.SetFloat("_Mode", 4.0f); // Additive
+                }
+                else if (srcBlend == UnityEngine.Rendering.BlendMode.DstColor && dstBlend == UnityEngine.Rendering.BlendMode.Zero)
+                {
+                    mat.SetFloat("_Mode", 5.0f); // Multiply
+                }
+                else if (srcBlend == UnityEngine.Rendering.BlendMode.One && dstBlend == UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha)
+                {
+                    mat.SetFloat("_Mode", 3.0f); // Premultiplied Fade
+                }
+                else
+                {
+                    mat.SetFloat("_Mode", 2.0f); // Standard Transparent AlphaBlend
+                }
+
                 mat.SetInt("_SrcBlend", (int)srcBlend);
                 mat.SetInt("_DstBlend", (int)dstBlend);
                 mat.SetInt("_ZWrite", 0);
                 mat.SetOverrideTag("RenderType", "Transparent");
+                mat.SetOverrideTag("Queue", "Transparent");
                 mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
                 mat.SetShaderPassEnabled("ShadowCaster", false);
                 mat.SetShaderPassEnabled("DepthOnly", false);
@@ -293,6 +321,7 @@ namespace UnityNinja.Editor
                 mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
                 mat.SetInt("_ZWrite", 1);
                 mat.SetOverrideTag("RenderType", "Opaque");
+                mat.SetOverrideTag("Queue", "Geometry");
                 mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Geometry;
                 mat.SetShaderPassEnabled("ShadowCaster", true);
                 mat.SetShaderPassEnabled("DepthOnly", true);

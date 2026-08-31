@@ -16,6 +16,12 @@ Shader "Ninja/Standard"
         // Environment Mapping Flag (0x400000)
         [ToggleUI] _UseEnvMap ("Environment Mapping (Spherical Normal)", Float) = 0.0
 
+        // UV Clamping & Mirror / Flipping Flags (TileMode)
+        [ToggleUI] _ClampU ("Clamp U", Float) = 0.0
+        [ToggleUI] _ClampV ("Clamp V", Float) = 0.0
+        [ToggleUI] _FlipU ("Flip / Mirror U", Float) = 0.0
+        [ToggleUI] _FlipV ("Flip / Mirror V", Float) = 0.0
+
         // Raw Metadata Flags
         _MaterialFlags ("Ninja Material Flags", Float) = 0.0
 
@@ -37,7 +43,7 @@ Shader "Ninja/Standard"
         LOD 200
         Cull [_Cull]
 
-        // Forward Base Pass
+        // 1. Forward Base Pass
         Pass
         {
             Name "FORWARD"
@@ -66,7 +72,7 @@ Shader "Ninja/Standard"
             ENDCG
         }
 
-        // Forward Add Pass (Point / Spot lights)
+        // 2. Forward Add Pass (Point / Spot lights)
         Pass
         {
             Name "FORWARD_DELTA"
@@ -95,7 +101,7 @@ Shader "Ninja/Standard"
             ENDCG
         }
 
-        // Shadow Caster Pass
+        // 3. Shadow Caster Pass
         Pass
         {
             Name "ShadowCaster"
@@ -145,7 +151,7 @@ Shader "Ninja/Standard"
             ENDCG
         }
 
-        // Depth Only Pass
+        // 4. Depth Only Pass
         Pass
         {
             Name "DepthOnly"

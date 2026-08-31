@@ -37,6 +37,11 @@ namespace UnityNinja.Editor
         private MaterialProperty unlitProp;
 
         private MaterialProperty useEnvMapProp;
+        private MaterialProperty clampUProp;
+        private MaterialProperty clampVProp;
+        private MaterialProperty flipUProp;
+        private MaterialProperty flipVProp;
+
         private MaterialProperty materialFlagsProp;
 
         public void FindProperties(MaterialProperty[] props)
@@ -61,6 +66,11 @@ namespace UnityNinja.Editor
             unlitProp = FindProperty("_Unlit", props, false);
 
             useEnvMapProp = FindProperty("_UseEnvMap", props, false);
+            clampUProp = FindProperty("_ClampU", props, false);
+            clampVProp = FindProperty("_ClampV", props, false);
+            flipUProp = FindProperty("_FlipU", props, false);
+            flipVProp = FindProperty("_FlipV", props, false);
+
             materialFlagsProp = FindProperty("_MaterialFlags", props, false);
         }
 
@@ -97,7 +107,20 @@ namespace UnityNinja.Editor
 
             EditorGUILayout.Space();
 
-            // 2. Lighting & Specular
+            // 2. UV Clamping & Mirroring (TileMode)
+            if (clampUProp != null || clampVProp != null || flipUProp != null || flipVProp != null)
+            {
+                EditorGUILayout.LabelField("UV Wrap & Clamping (TileMode)", EditorStyles.boldLabel);
+                EditorGUI.indentLevel++;
+                if (clampUProp != null) materialEditor.ShaderProperty(clampUProp, "Clamp U");
+                if (clampVProp != null) materialEditor.ShaderProperty(clampVProp, "Clamp V");
+                if (flipUProp != null) materialEditor.ShaderProperty(flipUProp, "Flip / Mirror U");
+                if (flipVProp != null) materialEditor.ShaderProperty(flipVProp, "Flip / Mirror V");
+                EditorGUI.indentLevel--;
+                EditorGUILayout.Space();
+            }
+
+            // 3. Lighting & Specular
             EditorGUILayout.LabelField("Lighting & Specular", EditorStyles.boldLabel);
             if (specColorProp != null) materialEditor.ShaderProperty(specColorProp, "Specular Color");
             if (shininessProp != null) materialEditor.ShaderProperty(shininessProp, "Shininess / Exponent");
@@ -105,7 +128,7 @@ namespace UnityNinja.Editor
 
             EditorGUILayout.Space();
 
-            // 3. Render & Blend Settings
+            // 4. Render & Blend Settings
             if (modeProp != null)
             {
                 EditorGUILayout.LabelField("Render & Blend Settings", EditorStyles.boldLabel);

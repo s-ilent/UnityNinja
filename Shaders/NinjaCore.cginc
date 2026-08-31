@@ -9,7 +9,12 @@ float _Cutoff;
 float _AlphaTest;
 float _Shininess;
 float _Unlit;
+
 float _UseEnvMap;
+float _ClampU;
+float _ClampV;
+float _FlipU;
+float _FlipV;
 float _MaterialFlags;
 
 struct appdata_ninja
@@ -63,10 +68,18 @@ fixed4 frag_ninja(v2f_ninja i) : SV_Target
 {
     float2 sampleUV = i.uv;
 
-    // Environment Mapping: Generate UVs from view-space spherical normal
+    // 1. Environment Reflection Mapping (0x400000)
     if (_UseEnvMap > 0.5)
     {
         sampleUV = GetEnvironmentUV(normalize(i.worldNormal), i.worldPos);
+    }
+    else
+    {
+        // 2. Texture Wrapping / Clamping / Flipping (Mirror)
+        if (_ClampU > 0.5) sampleUV.x = saturate(sampleUV.x);
+        if (_ClampV > 0.5) sampleUV.y = saturate(sampleUV.y);
+        if (_FlipU > 0.5 && (frac(sampleUV.x * 0.5) >= 0.5)) sampleUV.x = 1.0 - frac(sampleUV.x);
+        if (_FlipV > 0.5 && (frac(sampleUV.y * 0.5) >= 0.5)) sampleUV.y = 1.0 - frac(sampleUV.y);
     }
 
     fixed4 tex = tex2D(_MainTex, sampleUV);
@@ -111,6 +124,13 @@ fixed4 frag_ninja_add(v2f_ninja i) : SV_Target
     if (_UseEnvMap > 0.5)
     {
         sampleUV = GetEnvironmentUV(normalize(i.worldNormal), i.worldPos);
+    }
+    else
+    {
+        if (_ClampU > 0.5) sampleUV.x = saturate(sampleUV.x);
+        if (_ClampV > 0.5) sampleUV.y = saturate(sampleUV.y);
+        if (_FlipU > 0.5 && (frac(sampleUV.x * 0.5) >= 0.5)) sampleUV.x = 1.0 - frac(sampleUV.x);
+        if (_FlipV > 0.5 && (frac(sampleUV.y * 0.5) >= 0.5)) sampleUV.y = 1.0 - frac(sampleUV.y);
     }
 
     fixed4 tex = tex2D(_MainTex, sampleUV);
