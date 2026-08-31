@@ -1,0 +1,11 @@
+{
+  "name": "com.silent.unityninja",
+  "displayName": "UnityNinja",
+  "version": "1.0.0",
+  "unity": "2022.3",
+  "description": "Native importer, inspector, and renderer for Sega Ninja (Dreamcast, GameCube, Xbox, PC) formats (.nj, .gj, .xj, .nam, .njm, .salvl).",
+  "author": {
+    "name": "Silent",
+    "url": "https://github.com/s-ilent/UnityNinja"
+  }
+}
