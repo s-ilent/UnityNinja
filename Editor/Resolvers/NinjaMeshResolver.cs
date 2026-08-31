@@ -13,7 +13,94 @@ namespace UnityNinja.Editor
         public Vector3 Position;
         public Vector3 Normal;
         public Color32 Color;
+        public BoneWeight BoneWeight;
         public bool HasValue;
+        public bool HasWeight;
+    }
+
+    public class MeshBuffer
+    {
+        public readonly List<Vector3> Positions;
+        public readonly List<Vector3> Normals;
+        public readonly List<Vector4> Tangents;
+        public readonly List<Color32> Colors;
+        public readonly List<Vector2> UVs;
+        public readonly List<Vector2> UV2s;
+        public readonly List<BoneWeight> BoneWeights;
+        public readonly Dictionary<int, List<int>> SubmeshTriangles;
+        public bool HasWeights;
+
+        public MeshBuffer(int vertexCapacity = 0)
+        {
+            int cap = Math.Max(0, vertexCapacity);
+            Positions = new List<Vector3>(cap);
+            Normals = new List<Vector3>(cap);
+            Tangents = new List<Vector4>(cap);
+            Colors = new List<Color32>(cap);
+            UVs = new List<Vector2>(cap);
+            UV2s = new List<Vector2>(cap);
+            BoneWeights = new List<BoneWeight>(cap);
+            SubmeshTriangles = new Dictionary<int, List<int>>();
+        }
+
+        public void AddVertex(Vector3 pos, Vector3 norm, Vector2 uv, Color32 col, BoneWeight bw = default)
+        {
+            Positions.Add(pos);
+            Normals.Add(norm);
+            UVs.Add(uv);
+            Colors.Add(col);
+            BoneWeights.Add(bw);
+        }
+
+        public void AddTriangle(int submeshIndex, int v0, int v1, int v2)
+        {
+            if (v0 == v1 || v1 == v2 || v0 == v2) return;
+            if (!SubmeshTriangles.TryGetValue(submeshIndex, out var tris))
+            {
+                tris = new List<int>();
+                SubmeshTriangles[submeshIndex] = tris;
+            }
+            tris.Add(v0);
+            tris.Add(v1);
+            tris.Add(v2);
+        }
+
+        public List<int> GetSortedSubmeshKeys()
+        {
+            var keys = new List<int>(SubmeshTriangles.Keys);
+            keys.Sort();
+            return keys;
+        }
+
+        public Mesh BuildMesh(string meshName)
+        {
+            if (Positions.Count == 0) return null;
+            Mesh mesh = new Mesh { name = meshName };
+            if (Positions.Count > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+
+            mesh.SetVertices(Positions);
+            if (Normals.Count == Positions.Count) mesh.SetNormals(Normals);
+            if (Tangents.Count == Positions.Count) mesh.SetTangents(Tangents);
+            if (Colors.Count == Positions.Count) mesh.SetColors(Colors);
+            if (UVs.Count == Positions.Count) mesh.SetUVs(0, UVs);
+            if (UV2s.Count == Positions.Count) mesh.SetUVs(1, UV2s);
+
+            if (HasWeights && BoneWeights.Count == Positions.Count)
+            {
+                mesh.boneWeights = BoneWeights.ToArray();
+            }
+
+            var sortedKeys = GetSortedSubmeshKeys();
+            mesh.subMeshCount = sortedKeys.Count;
+            for (int i = 0; i < sortedKeys.Count; i++)
+            {
+                mesh.SetTriangles(SubmeshTriangles[sortedKeys[i]], i);
+            }
+
+            if (Normals.Count == 0) mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            return mesh;
+        }
     }
 
     public static class NinjaMeshResolver
@@ -37,18 +124,12 @@ namespace UnityNinja.Editor
             if (attach?.Vertices == null || attach.Vertices.Length == 0 || attach.MeshSets.Count == 0)
                 return null;
 
-            List<Vector3> localPositions = new List<Vector3>();
-            List<Vector3> localNormals = new List<Vector3>();
-            List<Vector2> localUVs = new List<Vector2>();
-            List<Color32> localColors = new List<Color32>();
-
-            List<List<int>> submeshTriangles = new List<List<int>>();
+            MeshBuffer buffer = new MeshBuffer(attach.Vertices.Length);
             List<Material> matList = new List<Material>();
 
             for (int m = 0; m < attach.MeshSets.Count; m++)
             {
                 var meshSet = attach.MeshSets[m];
-                List<int> tris = new List<int>();
                 int uvCursor = 0;
                 int colCursor = 0;
 
@@ -76,11 +157,8 @@ namespace UnityNinja.Editor
                             ? meshSet.VertexColors[colCursor]
                             : new Color32(255, 255, 255, 255);
 
-                        localIdxs[i] = localPositions.Count;
-                        localPositions.Add(pos);
-                        localNormals.Add(norm);
-                        localUVs.Add(uv);
-                        localColors.Add(col);
+                        localIdxs[i] = buffer.Positions.Count;
+                        buffer.AddVertex(pos, norm, uv, col);
 
                         uvCursor++;
                         colCursor++;
@@ -88,12 +166,12 @@ namespace UnityNinja.Editor
 
                     if (poly is NinjaTriangle)
                     {
-                        tris.Add(localIdxs[0]); tris.Add(localIdxs[2]); tris.Add(localIdxs[1]);
+                        buffer.AddTriangle(m, localIdxs[0], localIdxs[2], localIdxs[1]);
                     }
                     else if (poly is NinjaQuad)
                     {
-                        tris.Add(localIdxs[0]); tris.Add(localIdxs[2]); tris.Add(localIdxs[1]);
-                        tris.Add(localIdxs[0]); tris.Add(localIdxs[3]); tris.Add(localIdxs[2]);
+                        buffer.AddTriangle(m, localIdxs[0], localIdxs[2], localIdxs[1]);
+                        buffer.AddTriangle(m, localIdxs[0], localIdxs[3], localIdxs[2]);
                     }
                     else if (poly is NinjaStrip s)
                     {
@@ -101,22 +179,16 @@ namespace UnityNinja.Editor
                         for (int k = 0; k < polyVertCount - 2; k++)
                         {
                             if (flip)
-                            {
-                                tris.Add(localIdxs[k]); tris.Add(localIdxs[k + 2]); tris.Add(localIdxs[k + 1]);
-                            }
+                                buffer.AddTriangle(m, localIdxs[k], localIdxs[k + 2], localIdxs[k + 1]);
                             else
-                            {
-                                tris.Add(localIdxs[k + 1]); tris.Add(localIdxs[k + 2]); tris.Add(localIdxs[k]);
-                            }
+                                buffer.AddTriangle(m, localIdxs[k + 1], localIdxs[k + 2], localIdxs[k]);
                             flip = !flip;
                         }
                     }
                 }
 
-                if (tris.Count > 0)
+                if (buffer.SubmeshTriangles.ContainsKey(m) && buffer.SubmeshTriangles[m].Count > 0)
                 {
-                    submeshTriangles.Add(tris);
-
                     NJS_MATERIAL nMat = (attach.Materials != null && meshSet.MaterialID < attach.Materials.Count)
                         ? attach.Materials[meshSet.MaterialID]
                         : null;
@@ -136,29 +208,13 @@ namespace UnityNinja.Editor
                 }
             }
 
-            if (localPositions.Count == 0 || submeshTriangles.Count == 0) return null;
-
-            Mesh mesh = new Mesh { name = name };
-            if (localPositions.Count > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-
-            mesh.vertices = localPositions.ToArray();
-            mesh.normals = localNormals.ToArray();
-            mesh.uv = localUVs.ToArray();
-            mesh.colors32 = localColors.ToArray();
-
-            mesh.subMeshCount = submeshTriangles.Count;
-            for (int i = 0; i < submeshTriangles.Count; i++)
-            {
-                mesh.SetTriangles(submeshTriangles[i], i);
-            }
-
-            mesh.RecalculateBounds();
+            Mesh mesh = buffer.BuildMesh(name);
             materials = matList.ToArray();
             return mesh;
         }
         #endregion
 
-        #region 2. Chunk Attach with PolyCache & Volume Resolution
+        #region 2. Chunk Attach with PolyCache & Weight Resolution
         public static Mesh CreateMeshFromChunkAttach(
             ChunkAttach attach,
             float scale,
@@ -168,33 +224,89 @@ namespace UnityNinja.Editor
             string modelFolder,
             string[] texNameList,
             ChunkVertexEntry[] globalVertexBuffer,
+            int nodeIndex,
+            Matrix4x4 localToModel,
+            bool isSkinned,
             NinjaImportSettings settings,
             UnityEditor.AssetImporters.AssetImportContext ctx,
-            out Material[] materials)
+            out Material[] materials,
+            out BoneWeight[] outWeights)
         {
             materials = Array.Empty<Material>();
+            outWeights = null;
             if (attach == null) return null;
 
-            // 1. Upload vertices into global pool
+            // 1. Upload vertices & bone weights into global pool
             if (attach.VertexChunks != null)
             {
                 foreach (var vc in attach.VertexChunks)
                 {
+                    bool isWeighted = vc.Type is ChunkType.Vertex_VertexNinjaFlags or ChunkType.Vertex_VertexNormalNinjaFlags;
+
                     for (int i = 0; i < vc.VertexCount; i++)
                     {
                         int targetIdx = vc.IndexOffset + i;
                         if (targetIdx >= 0 && targetIdx < globalVertexBuffer.Length)
                         {
-                            Vector3 pos = NinjaCoordinateUtility.ToUnityPosition(vc.Vertices[i], scale);
-                            Vector3 norm = (i < vc.Normals.Count) ? NinjaCoordinateUtility.ToUnityNormal(vc.Normals[i]) : Vector3.up;
+                            Vector3 rawLocalPos = NinjaCoordinateUtility.ToUnityPosition(vc.Vertices[i], scale);
+                            Vector3 rawLocalNorm = (i < vc.Normals.Count) ? NinjaCoordinateUtility.ToUnityNormal(vc.Normals[i]) : Vector3.up;
+
+                            Vector3 pos = isSkinned ? localToModel.MultiplyPoint3x4(rawLocalPos) : rawLocalPos;
+                            Vector3 norm = isSkinned ? localToModel.MultiplyVector(rawLocalNorm).normalized : rawLocalNorm;
                             Color32 col = (i < vc.Diffuse.Count) ? vc.Diffuse[i] : new Color32(255, 255, 255, 255);
+
+                            BoneWeight bw = default;
+                            bool hasWeight = false;
+
+                            if (isWeighted && vc.NinjaFlags != null && i < vc.NinjaFlags.Count)
+                            {
+                                uint nFlag = vc.NinjaFlags[i];
+                                int localTarget = (int)(nFlag & 0xFFFF);
+                                int actualTarget = (vc.WeightStatus == WeightStatus.Start) ? targetIdx : localTarget;
+
+                                uint rawW = (nFlag >> 16) & 0xFFFF;
+                                float weightVal = rawW > 255 ? (rawW / 65535.0f) : (rawW / 255.0f);
+                                if (weightVal <= 0.0f) weightVal = 1.0f;
+
+                                if (actualTarget >= 0 && actualTarget < globalVertexBuffer.Length)
+                                {
+                                    if (vc.WeightStatus == WeightStatus.Start || !globalVertexBuffer[actualTarget].HasWeight)
+                                    {
+                                        bw.boneIndex0 = nodeIndex;
+                                        bw.weight0 = weightVal;
+                                        hasWeight = true;
+
+                                        globalVertexBuffer[actualTarget] = new ChunkVertexEntry
+                                        {
+                                            Position = pos,
+                                            Normal = norm,
+                                            Color = col,
+                                            BoneWeight = bw,
+                                            HasValue = true,
+                                            HasWeight = true
+                                        };
+                                    }
+                                    else
+                                    {
+                                        bw = globalVertexBuffer[actualTarget].BoneWeight;
+                                        if (bw.weight1 <= 0.0001f) { bw.boneIndex1 = nodeIndex; bw.weight1 = weightVal; }
+                                        else if (bw.weight2 <= 0.0001f) { bw.boneIndex2 = nodeIndex; bw.weight2 = weightVal; }
+                                        else if (bw.weight3 <= 0.0001f) { bw.boneIndex3 = nodeIndex; bw.weight3 = weightVal; }
+
+                                        globalVertexBuffer[actualTarget].BoneWeight = bw;
+                                    }
+                                }
+                                continue;
+                            }
 
                             globalVertexBuffer[targetIdx] = new ChunkVertexEntry
                             {
                                 Position = pos,
                                 Normal = norm,
                                 Color = col,
-                                HasValue = true
+                                BoneWeight = bw,
+                                HasValue = true,
+                                HasWeight = hasWeight || globalVertexBuffer[targetIdx].HasWeight
                             };
                         }
                     }
@@ -203,19 +315,14 @@ namespace UnityNinja.Editor
 
             if (attach.PolyChunks == null || attach.PolyChunks.Count == 0) return null;
 
-            // Flatten PolyChunks with Polygon Cache resolution
             List<PolyChunk> resolvedPolyChunks = FlattenPolyChunks(attach.PolyChunks);
 
-            List<Vector3> localPositions = new List<Vector3>();
-            List<Vector3> localNormals = new List<Vector3>();
-            List<Color32> localColors = new List<Color32>();
-            List<Vector2> localUVs = new List<Vector2>();
-
-            List<List<int>> submeshes = new List<List<int>>();
+            MeshBuffer buffer = new MeshBuffer(256);
             List<Material> matList = new List<Material>();
 
             NJS_MATERIAL currentMaterialState = new NJS_MATERIAL();
             int currentMaterialIndex = 0;
+            int currentSubmeshIdx = 0;
 
             foreach (var pc in resolvedPolyChunks)
             {
@@ -232,8 +339,6 @@ namespace UnityNinja.Editor
                 }
                 else if (pc is PolyChunkStrip stripChunk)
                 {
-                    List<int> currentTriangles = new List<int>();
-
                     foreach (var strip in stripChunk.Strips)
                     {
                         if (strip.Indexes == null || strip.Indexes.Length < 3) continue;
@@ -244,27 +349,47 @@ namespace UnityNinja.Editor
                         for (int k = 0; k < stripLen; k++)
                         {
                             int gIdx = strip.Indexes[k];
-                            Vector3 pos = (gIdx >= 0 && gIdx < globalVertexBuffer.Length && globalVertexBuffer[gIdx].HasValue)
-                                ? globalVertexBuffer[gIdx].Position
-                                : Vector3.zero;
+                            bool hasVtx = gIdx >= 0 && gIdx < globalVertexBuffer.Length && globalVertexBuffer[gIdx].HasValue;
 
-                            Vector3 norm = (gIdx >= 0 && gIdx < globalVertexBuffer.Length && globalVertexBuffer[gIdx].HasValue)
-                                ? globalVertexBuffer[gIdx].Normal
-                                : Vector3.up;
+                            Vector3 pos = hasVtx ? globalVertexBuffer[gIdx].Position : Vector3.zero;
+                            Vector3 norm = hasVtx ? globalVertexBuffer[gIdx].Normal : Vector3.up;
 
                             Color32 col = (strip.Colors != null && k < strip.Colors.Length)
                                 ? strip.Colors[k]
-                                : ((gIdx >= 0 && gIdx < globalVertexBuffer.Length && globalVertexBuffer[gIdx].HasValue) ? globalVertexBuffer[gIdx].Color : new Color32(255, 255, 255, 255));
+                                : (hasVtx ? globalVertexBuffer[gIdx].Color : new Color32(255, 255, 255, 255));
 
                             Vector2 uv = (strip.UVs != null && k < strip.UVs.Length)
                                 ? NinjaCoordinateUtility.ToUnityUV(strip.UVs[k])
                                 : Vector2.zero;
 
-                            localIndices[k] = localPositions.Count;
-                            localPositions.Add(pos);
-                            localNormals.Add(norm);
-                            localColors.Add(col);
-                            localUVs.Add(uv);
+                            BoneWeight bw = default;
+                            if (hasVtx && globalVertexBuffer[gIdx].HasWeight)
+                            {
+                                bw = globalVertexBuffer[gIdx].BoneWeight;
+                                float totalW = bw.weight0 + bw.weight1 + bw.weight2 + bw.weight3;
+                                if (totalW > 0.0001f)
+                                {
+                                    bw.weight0 /= totalW;
+                                    bw.weight1 /= totalW;
+                                    bw.weight2 /= totalW;
+                                    bw.weight3 /= totalW;
+                                }
+                                else
+                                {
+                                    bw.boneIndex0 = nodeIndex;
+                                    bw.weight0 = 1.0f;
+                                }
+                                buffer.HasWeights = true;
+                            }
+                            else if (isSkinned)
+                            {
+                                bw.boneIndex0 = nodeIndex;
+                                bw.weight0 = 1.0f;
+                                buffer.HasWeights = true;
+                            }
+
+                            localIndices[k] = buffer.Positions.Count;
+                            buffer.AddVertex(pos, norm, uv, col, bw);
                         }
 
                         bool flip = !strip.Reversed;
@@ -274,25 +399,17 @@ namespace UnityNinja.Editor
                             int v1 = localIndices[k + 1];
                             int v2 = localIndices[k + 2];
 
-                            if (v0 != v1 && v1 != v2 && v0 != v2)
-                            {
-                                if (flip)
-                                {
-                                    currentTriangles.Add(v0); currentTriangles.Add(v2); currentTriangles.Add(v1);
-                                }
-                                else
-                                {
-                                    currentTriangles.Add(v1); currentTriangles.Add(v2); currentTriangles.Add(v0);
-                                }
-                            }
+                            if (flip)
+                                buffer.AddTriangle(currentSubmeshIdx, v0, v2, v1);
+                            else
+                                buffer.AddTriangle(currentSubmeshIdx, v1, v2, v0);
+
                             flip = !flip;
                         }
                     }
 
-                    if (currentTriangles.Count > 0)
+                    if (buffer.SubmeshTriangles.ContainsKey(currentSubmeshIdx) && buffer.SubmeshTriangles[currentSubmeshIdx].Count > 0)
                     {
-                        submeshes.Add(currentTriangles);
-
                         Material resolved = NinjaMaterialResolver.ResolveMaterial(
                             currentMaterialState,
                             currentMaterialIndex,
@@ -305,27 +422,17 @@ namespace UnityNinja.Editor
                         );
 
                         matList.Add(resolved);
+                        currentSubmeshIdx++;
                     }
                 }
             }
 
-            if (localPositions.Count == 0 || submeshes.Count == 0) return null;
-
-            Mesh mesh = new Mesh { name = name };
-            if (localPositions.Count > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-
-            mesh.vertices = localPositions.ToArray();
-            mesh.normals = localNormals.ToArray();
-            mesh.colors32 = localColors.ToArray();
-            mesh.uv = localUVs.ToArray();
-
-            mesh.subMeshCount = submeshes.Count;
-            for (int i = 0; i < submeshes.Count; i++)
+            Mesh mesh = buffer.BuildMesh(name);
+            if (buffer.HasWeights)
             {
-                mesh.SetTriangles(submeshes[i], i);
+                outWeights = buffer.BoneWeights.ToArray();
             }
 
-            mesh.RecalculateBounds();
             materials = matList.ToArray();
             return mesh;
         }
@@ -359,50 +466,7 @@ namespace UnityNinja.Editor
         }
         #endregion
 
-        #region 3. Shape Motion / BlendShape Baking
-        public static void BakeShapeMotionBlendShapes(
-            Mesh mesh,
-            NJS_OBJECT node,
-            AnimModelData animData,
-            float scale)
-        {
-            if (mesh == null || animData == null || (animData.Vertex.Count == 0 && animData.Normal.Count == 0))
-                return;
-        
-            Vector3[] baseVertices = mesh.vertices;
-            Vector3[] baseNormals = mesh.normals;
-        
-            foreach (var kvp in animData.Vertex)
-            {
-                int frame = kvp.Key;
-                Vector3[] targetVerts = kvp.Value;
-                Vector3[] targetNormals = animData.Normal.ContainsKey(frame) ? animData.Normal[frame] : null;
-        
-                Vector3[] deltaVertices = new Vector3[baseVertices.Length];
-                Vector3[] deltaNormals = new Vector3[baseNormals.Length];
-        
-                for (int i = 0; i < baseVertices.Length; i++)
-                {
-                    if (i < targetVerts.Length)
-                    {
-                        Vector3 targetPos = NinjaCoordinateUtility.ToUnityPosition(targetVerts[i], scale);
-                        deltaVertices[i] = targetPos - baseVertices[i];
-                    }
-        
-                    if (targetNormals != null && i < targetNormals.Length)
-                    {
-                        Vector3 targetNorm = NinjaCoordinateUtility.ToUnityNormal(targetNormals[i]);
-                        deltaNormals[i] = targetNorm - baseNormals[i];
-                    }
-                }
-        
-                string shapeName = $"Shape_Frame_{frame}";
-                mesh.AddBlendShapeFrame(shapeName, 100.0f, deltaVertices, deltaNormals, null);
-            }
-        }
-        #endregion
-
-        #region 4. Ginja & Xinja Attach Decoders
+        #region 3. Ginja & Xinja Attach Decoders
         public static Mesh CreateMeshFromGCAttach(
             GCAttach attach,
             float scale,
@@ -411,6 +475,7 @@ namespace UnityNinja.Editor
             string assetName,
             string modelFolder,
             string[] texNameList,
+            int nodeIndex,
             NinjaImportSettings settings,
             UnityEditor.AssetImporters.AssetImportContext ctx,
             out Material[] materials,
@@ -426,28 +491,23 @@ namespace UnityNinja.Editor
             List<Color32> colors = attach.VertexData.Find(x => x.Attribute == GCVertexAttribute.Color0)?.Colors ?? new List<Color32>();
             List<Vector2> uvs = attach.VertexData.Find(x => x.Attribute == GCVertexAttribute.Tex0)?.UVs ?? new List<Vector2>();
 
-            Vector3[] unityPositions = new Vector3[positions.Count];
-            Vector3[] unityNormals = new Vector3[positions.Count];
-            Color32[] unityColors = new Color32[positions.Count];
-            Vector2[] unityUVs = new Vector2[positions.Count];
+            MeshBuffer buffer = new MeshBuffer(positions.Count);
 
-            for (int i = 0; i < positions.Count; i++)
-            {
-                unityPositions[i] = NinjaCoordinateUtility.ToUnityPosition(positions[i], scale);
-                unityNormals[i] = (i < normals.Count) ? NinjaCoordinateUtility.ToUnityNormal(normals[i]) : Vector3.up;
-                unityColors[i] = (i < colors.Count) ? colors[i] : new Color32(255, 255, 255, 255);
-                unityUVs[i] = (i < uvs.Count) ? NinjaCoordinateUtility.ToUnityUV(uvs[i]) : Vector2.zero;
-            }
-
+            BoneWeight[] weights = null;
             if (attach.VertexSkinData != null && attach.VertexSkinData.Count > 0)
             {
-                boneWeights = new BoneWeight[positions.Count];
+                weights = new BoneWeight[positions.Count];
+                buffer.HasWeights = true;
                 foreach (var skinSet in attach.VertexSkinData)
                 {
                     if (skinSet.ElementType == GCSkinAttribute.StaticWeight)
                     {
                         for (int i = 0; i < skinSet.IndexCount; i++)
-                            boneWeights[skinSet.StartingIndex + i] = new BoneWeight { boneIndex0 = 0, weight0 = 1.0f };
+                        {
+                            int vIdx = skinSet.StartingIndex + i;
+                            if (vIdx < weights.Length)
+                                weights[vIdx] = new BoneWeight { boneIndex0 = nodeIndex, weight0 = 1.0f };
+                        }
                     }
                     else if (skinSet.ElementType is GCSkinAttribute.PartialWeightStart or GCSkinAttribute.PartialWeight)
                     {
@@ -455,31 +515,41 @@ namespace UnityNinja.Editor
                         {
                             int vIdx = skinSet.WeightData[i].x;
                             float w = skinSet.WeightData[i].y / 255.0f;
-                            if (vIdx < boneWeights.Length)
+                            if (vIdx < weights.Length)
                             {
-                                BoneWeight bw = boneWeights[vIdx];
-                                if (bw.weight0 <= 0f) { bw.boneIndex0 = 0; bw.weight0 = w; }
-                                else if (bw.weight1 <= 0f) { bw.boneIndex1 = 1; bw.weight1 = w; }
-                                else if (bw.weight2 <= 0f) { bw.boneIndex2 = 2; bw.weight2 = w; }
-                                else if (bw.weight3 <= 0f) { bw.boneIndex3 = 3; bw.weight3 = w; }
-                                boneWeights[vIdx] = bw;
+                                BoneWeight bw = weights[vIdx];
+                                if (bw.weight0 <= 0.0001f) { bw.boneIndex0 = nodeIndex; bw.weight0 = w; }
+                                else if (bw.weight1 <= 0.0001f) { bw.boneIndex1 = nodeIndex; bw.weight1 = w; }
+                                else if (bw.weight2 <= 0.0001f) { bw.boneIndex2 = nodeIndex; bw.weight2 = w; }
+                                else if (bw.weight3 <= 0.0001f) { bw.boneIndex3 = nodeIndex; bw.weight3 = w; }
+                                weights[vIdx] = bw;
                             }
                         }
                     }
                 }
             }
 
+            for (int i = 0; i < positions.Count; i++)
+            {
+                Vector3 p = NinjaCoordinateUtility.ToUnityPosition(positions[i], scale);
+                Vector3 n = (i < normals.Count) ? NinjaCoordinateUtility.ToUnityNormal(normals[i]) : Vector3.up;
+                Color32 c = (i < colors.Count) ? colors[i] : new Color32(255, 255, 255, 255);
+                Vector2 uv = (i < uvs.Count) ? NinjaCoordinateUtility.ToUnityUV(uvs[i]) : Vector2.zero;
+                BoneWeight bw = weights != null && i < weights.Length ? weights[i] : default;
+
+                buffer.AddVertex(p, n, uv, c, bw);
+            }
+
             List<GCMesh> allMeshes = new List<GCMesh>();
             allMeshes.AddRange(attach.OpaqueMeshes);
             allMeshes.AddRange(attach.TranslucentMeshes);
 
-            List<List<int>> submeshes = new List<List<int>>();
             List<Material> matList = new List<Material>();
+            int submeshIdx = 0;
 
             for (int m = 0; m < allMeshes.Count; m++)
             {
                 var mesh = allMeshes[m];
-                List<int> triangles = new List<int>();
                 float uvScaleDivisor = 1.0f;
 
                 NJS_MATERIAL matState = new NJS_MATERIAL();
@@ -510,23 +580,19 @@ namespace UnityNinja.Editor
                     var loops = prim.ToTriangles();
                     for (int i = 0; i < loops.Count - 2; i += 3)
                     {
-                        triangles.Add(loops[i].PositionIndex);
-                        triangles.Add(loops[i + 2].PositionIndex);
-                        triangles.Add(loops[i + 1].PositionIndex);
+                        buffer.AddTriangle(submeshIdx, loops[i].PositionIndex, loops[i + 2].PositionIndex, loops[i + 1].PositionIndex);
 
                         if (uvScaleDivisor > 1.0f)
                         {
-                            unityUVs[loops[i].PositionIndex] /= uvScaleDivisor;
-                            unityUVs[loops[i + 1].PositionIndex] /= uvScaleDivisor;
-                            unityUVs[loops[i + 2].PositionIndex] /= uvScaleDivisor;
+                            buffer.UVs[loops[i].PositionIndex] /= uvScaleDivisor;
+                            buffer.UVs[loops[i + 1].PositionIndex] /= uvScaleDivisor;
+                            buffer.UVs[loops[i + 2].PositionIndex] /= uvScaleDivisor;
                         }
                     }
                 }
 
-                if (triangles.Count > 0)
+                if (buffer.SubmeshTriangles.ContainsKey(submeshIdx) && buffer.SubmeshTriangles[submeshIdx].Count > 0)
                 {
-                    submeshes.Add(triangles);
-
                     Material resolved = NinjaMaterialResolver.ResolveMaterial(
                         matState,
                         m,
@@ -539,30 +605,13 @@ namespace UnityNinja.Editor
                     );
 
                     matList.Add(resolved);
+                    submeshIdx++;
                 }
             }
 
-            Mesh uMesh = new Mesh { name = name };
-            if (unityPositions.Length > 65535) uMesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-
-            uMesh.vertices = unityPositions;
-            uMesh.normals = unityNormals;
-            uMesh.colors32 = unityColors;
-            uMesh.uv = unityUVs;
-
-            if (boneWeights != null)
-            {
-                uMesh.boneWeights = boneWeights;
-            }
-
-            uMesh.subMeshCount = submeshes.Count;
-            for (int i = 0; i < submeshes.Count; i++)
-            {
-                uMesh.SetTriangles(submeshes[i], i);
-            }
-
-            uMesh.RecalculateBounds();
+            Mesh uMesh = buffer.BuildMesh(name);
             materials = matList.ToArray();
+            boneWeights = weights;
             return uMesh;
         }
 
@@ -582,33 +631,34 @@ namespace UnityNinja.Editor
             if (attach == null || attach.VertexSets.Count == 0) return null;
 
             var vSet = attach.VertexSets[0];
-            Vector3[] positions = new Vector3[vSet.Positions.Count];
-            Vector3[] normals = new Vector3[vSet.Positions.Count];
-            Color32[] colors = new Color32[vSet.Positions.Count];
-            Vector2[] uvs = new Vector2[vSet.Positions.Count];
+            MeshBuffer buffer = new MeshBuffer(vSet.Positions.Count);
 
             for (int i = 0; i < vSet.Positions.Count; i++)
             {
-                positions[i] = NinjaCoordinateUtility.ToUnityPosition(vSet.Positions[i], scale);
-                normals[i] = (i < vSet.Normals.Count) ? NinjaCoordinateUtility.ToUnityNormal(vSet.Normals[i]) : Vector3.up;
-                colors[i] = (i < vSet.Colors.Count) ? vSet.Colors[i] : new Color32(255, 255, 255, 255);
-                uvs[i] = (i < vSet.UVs.Count) ? NinjaCoordinateUtility.ToUnityUV(vSet.UVs[i]) : Vector2.zero;
+                Vector3 p = NinjaCoordinateUtility.ToUnityPosition(vSet.Positions[i], scale);
+                Vector3 n = (i < vSet.Normals.Count) ? NinjaCoordinateUtility.ToUnityNormal(vSet.Normals[i]) : Vector3.up;
+                Color32 c = (i < vSet.Colors.Count) ? vSet.Colors[i] : new Color32(255, 255, 255, 255);
+                Vector2 uv = (i < vSet.UVs.Count) ? NinjaCoordinateUtility.ToUnityUV(vSet.UVs[i]) : Vector2.zero;
+
+                buffer.AddVertex(p, n, uv, c);
             }
 
-            List<List<int>> submeshes = new List<List<int>>();
             List<Material> matList = new List<Material>();
-
             List<XJMesh> allMeshes = new List<XJMesh>();
             allMeshes.AddRange(attach.OpaqueMeshes);
             allMeshes.AddRange(attach.TranslucentMeshes);
 
+            int submeshIdx = 0;
             for (int m = 0; m < allMeshes.Count; m++)
             {
                 var mesh = allMeshes[m];
                 List<int> tris = mesh.TriangulateStrips();
-                if (tris.Count > 0)
+                if (tris.Count >= 3)
                 {
-                    submeshes.Add(tris);
+                    for (int t = 0; t < tris.Count - 2; t += 3)
+                    {
+                        buffer.AddTriangle(submeshIdx, tris[t], tris[t + 1], tris[t + 2]);
+                    }
 
                     Material resolved = NinjaMaterialResolver.ResolveMaterial(
                         mesh.Material,
@@ -622,24 +672,11 @@ namespace UnityNinja.Editor
                     );
 
                     matList.Add(resolved);
+                    submeshIdx++;
                 }
             }
 
-            Mesh uMesh = new Mesh { name = name };
-            if (positions.Length > 65535) uMesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-
-            uMesh.vertices = positions;
-            uMesh.normals = normals;
-            uMesh.colors32 = colors;
-            uMesh.uv = uvs;
-
-            uMesh.subMeshCount = submeshes.Count;
-            for (int i = 0; i < submeshes.Count; i++)
-            {
-                uMesh.SetTriangles(submeshes[i], i);
-            }
-
-            uMesh.RecalculateBounds();
+            Mesh uMesh = buffer.BuildMesh(name);
             materials = matList.ToArray();
             return uMesh;
         }

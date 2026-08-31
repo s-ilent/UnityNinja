@@ -80,197 +80,204 @@ namespace UnityNinja
             int mdataAddr = (int)(ByteConverter.ToUInt32(file, address) - imageBase);
             if (mdataAddr < 0 || mdataAddr >= file.Length) return;
 
+            // Resolve Sega Ninja channel order for NJS_MDATA
+            List<string> activeChannels = GetActiveChannels(Flags);
+            int channelCount = activeChannels.Count;
+
             for (int i = 0; i < ModelParts && mdataAddr < file.Length; i++)
             {
                 AnimModelData data = new AnimModelData();
 
-                uint posOff = Flags.HasFlag(AnimFlags.Position) ? ReadOffset(file, ref mdataAddr, imageBase) : 0;
-                uint rotOff = Flags.HasFlag(AnimFlags.Rotation) ? ReadOffset(file, ref mdataAddr, imageBase) : 0;
-                uint sclOff = Flags.HasFlag(AnimFlags.Scale) ? ReadOffset(file, ref mdataAddr, imageBase) : 0;
-                uint vecOff = Flags.HasFlag(AnimFlags.Vector) ? ReadOffset(file, ref mdataAddr, imageBase) : 0;
-                uint vertOff = Flags.HasFlag(AnimFlags.Vertex) ? ReadOffset(file, ref mdataAddr, imageBase) : 0;
-                uint normOff = Flags.HasFlag(AnimFlags.Normal) ? ReadOffset(file, ref mdataAddr, imageBase) : 0;
-                uint targOff = Flags.HasFlag(AnimFlags.Target) ? ReadOffset(file, ref mdataAddr, imageBase) : 0;
-                uint rollOff = Flags.HasFlag(AnimFlags.Roll) ? ReadOffset(file, ref mdataAddr, imageBase) : 0;
-                uint angOff = Flags.HasFlag(AnimFlags.Angle) ? ReadOffset(file, ref mdataAddr, imageBase) : 0;
-                uint colOff = Flags.HasFlag(AnimFlags.Color) ? ReadOffset(file, ref mdataAddr, imageBase) : 0;
-                uint intOff = Flags.HasFlag(AnimFlags.Intensity) ? ReadOffset(file, ref mdataAddr, imageBase) : 0;
-                uint quatOff = Flags.HasFlag(AnimFlags.Quaternion) ? ReadOffset(file, ref mdataAddr, imageBase) : 0;
-
-                // 1. Position Tracks
-                if (Flags.HasFlag(AnimFlags.Position))
+                // 1. Read Pointer Offsets
+                Dictionary<string, uint> offsets = new Dictionary<string, uint>();
+                for (int c = 0; c < channelCount && mdataAddr + 4 <= file.Length; c++)
                 {
-                    int kfCount = ByteConverter.ToInt32(file, mdataAddr); mdataAddr += 4;
-                    if (posOff > 0 && kfCount > 0 && posOff + kfCount * 16 <= file.Length)
+                    uint off = ByteConverter.ToUInt32(file, mdataAddr);
+                    mdataAddr += 4;
+                    offsets[activeChannels[c]] = off > 0 ? off - imageBase : 0;
+                }
+
+                // 2. Read Keyframe Counts
+                Dictionary<string, int> counts = new Dictionary<string, int>();
+                for (int c = 0; c < channelCount && mdataAddr + 4 <= file.Length; c++)
+                {
+                    counts[activeChannels[c]] = ByteConverter.ToInt32(file, mdataAddr);
+                    mdataAddr += 4;
+                }
+
+                // 3. Read Keyframe Data
+                // Position (16 bytes/frame)
+                if (offsets.TryGetValue("Position", out uint posOff) && posOff > 0 && counts.TryGetValue("Position", out int posCount) && posCount > 0)
+                {
+                    int pAddr = (int)posOff;
+                    for (int k = 0; k < posCount && pAddr + 16 <= file.Length; k++)
                     {
-                        int pAddr = (int)posOff;
-                        for (int k = 0; k < kfCount; k++)
+                        int f = ByteConverter.ToInt32(file, pAddr);
+                        Vector3 v = new Vector3(ByteConverter.ToSingle(file, pAddr + 4), ByteConverter.ToSingle(file, pAddr + 8), ByteConverter.ToSingle(file, pAddr + 12));
+                        data.Position[f] = v;
+                        pAddr += 16;
+                    }
+                }
+
+                // Rotation (Euler 16 bytes/frame or ShortRot 8 bytes/frame)
+                if (offsets.TryGetValue("Rotation", out uint rotOff) && rotOff > 0 && counts.TryGetValue("Rotation", out int rotCount) && rotCount > 0)
+                {
+                    int rAddr = (int)rotOff;
+                    for (int k = 0; k < rotCount && rAddr < file.Length; k++)
+                    {
+                        if (ShortRot && rAddr + 8 <= file.Length)
                         {
-                            int f = ByteConverter.ToInt32(file, pAddr);
-                            Vector3 v = new Vector3(ByteConverter.ToSingle(file, pAddr + 4), ByteConverter.ToSingle(file, pAddr + 8), ByteConverter.ToSingle(file, pAddr + 12));
-                            data.Position[f] = v;
-                            pAddr += 16;
+                            int f = ByteConverter.ToInt16(file, rAddr);
+                            short rx = ByteConverter.ToInt16(file, rAddr + 2);
+                            short ry = ByteConverter.ToInt16(file, rAddr + 4);
+                            short rz = ByteConverter.ToInt16(file, rAddr + 6);
+                            data.Rotation[f] = new NinjaRotation(rx, ry, rz);
+                            rAddr += 8;
+                        }
+                        else if (rAddr + 16 <= file.Length)
+                        {
+                            int f = ByteConverter.ToInt32(file, rAddr);
+                            int rx = ByteConverter.ToInt32(file, rAddr + 4);
+                            int ry = ByteConverter.ToInt32(file, rAddr + 8);
+                            int rz = ByteConverter.ToInt32(file, rAddr + 12);
+                            data.Rotation[f] = new NinjaRotation(rx, ry, rz);
+                            rAddr += 16;
                         }
                     }
                 }
 
-                // 2. Rotation Tracks
-                if (Flags.HasFlag(AnimFlags.Rotation))
+                // Quaternion (20 bytes/frame: f, w, x, y, z)
+                if (offsets.TryGetValue("Quaternion", out uint quatOff) && quatOff > 0 && counts.TryGetValue("Quaternion", out int quatCount) && quatCount > 0)
                 {
-                    int kfCount = ByteConverter.ToInt32(file, mdataAddr); mdataAddr += 4;
-                    if (rotOff > 0 && kfCount > 0)
+                    int qAddr = (int)quatOff;
+                    for (int k = 0; k < quatCount && qAddr + 20 <= file.Length; k++)
                     {
-                        int rAddr = (int)rotOff;
-                        for (int k = 0; k < kfCount && rAddr < file.Length; k++)
+                        int f = ByteConverter.ToInt32(file, qAddr);
+                        float w = ByteConverter.ToSingle(file, qAddr + 4);
+                        float x = ByteConverter.ToSingle(file, qAddr + 8);
+                        float y = ByteConverter.ToSingle(file, qAddr + 12);
+                        float z = ByteConverter.ToSingle(file, qAddr + 16);
+                        data.Quaternion[f] = new Quaternion(x, y, z, w);
+                        qAddr += 20;
+                    }
+                }
+
+                // Scale (16 bytes/frame)
+                if (offsets.TryGetValue("Scale", out uint sclOff) && sclOff > 0 && counts.TryGetValue("Scale", out int sclCount) && sclCount > 0)
+                {
+                    int sAddr = (int)sclOff;
+                    for (int k = 0; k < sclCount && sAddr + 16 <= file.Length; k++)
+                    {
+                        int f = ByteConverter.ToInt32(file, sAddr);
+                        Vector3 s = new Vector3(ByteConverter.ToSingle(file, sAddr + 4), ByteConverter.ToSingle(file, sAddr + 8), ByteConverter.ToSingle(file, sAddr + 12));
+                        data.Scale[f] = s;
+                        sAddr += 16;
+                    }
+                }
+
+                // Vector / Target (16 bytes/frame)
+                if (offsets.TryGetValue("Vector", out uint vecOff) && vecOff > 0 && counts.TryGetValue("Vector", out int vecCount) && vecCount > 0)
+                {
+                    int vAddr = (int)vecOff;
+                    for (int k = 0; k < vecCount && vAddr + 16 <= file.Length; k++)
+                    {
+                        int f = ByteConverter.ToInt32(file, vAddr);
+                        data.Vector[f] = new Vector3(ByteConverter.ToSingle(file, vAddr + 4), ByteConverter.ToSingle(file, vAddr + 8), ByteConverter.ToSingle(file, vAddr + 12));
+                        vAddr += 16;
+                    }
+                }
+
+                if (offsets.TryGetValue("Target", out uint targOff) && targOff > 0 && counts.TryGetValue("Target", out int targCount) && targCount > 0)
+                {
+                    int tAddr = (int)targOff;
+                    for (int k = 0; k < targCount && tAddr + 16 <= file.Length; k++)
+                    {
+                        int f = ByteConverter.ToInt32(file, tAddr);
+                        data.Target[f] = new Vector3(ByteConverter.ToSingle(file, tAddr + 4), ByteConverter.ToSingle(file, tAddr + 8), ByteConverter.ToSingle(file, tAddr + 12));
+                        tAddr += 16;
+                    }
+                }
+
+                // Roll / Angle (8 bytes/frame)
+                if (offsets.TryGetValue("Roll", out uint rollOff) && rollOff > 0 && counts.TryGetValue("Roll", out int rollCount) && rollCount > 0)
+                {
+                    int rlAddr = (int)rollOff;
+                    for (int k = 0; k < rollCount && rlAddr + 8 <= file.Length; k++)
+                    {
+                        int f = ByteConverter.ToInt32(file, rlAddr);
+                        data.Roll[f] = ByteConverter.ToInt32(file, rlAddr + 4);
+                        rlAddr += 8;
+                    }
+                }
+
+                if (offsets.TryGetValue("Angle", out uint angOff) && angOff > 0 && counts.TryGetValue("Angle", out int angCount) && angCount > 0)
+                {
+                    int aAddr = (int)angOff;
+                    for (int k = 0; k < angCount && aAddr + 8 <= file.Length; k++)
+                    {
+                        int f = ByteConverter.ToInt32(file, aAddr);
+                        data.Angle[f] = ByteConverter.ToInt32(file, aAddr + 4);
+                        aAddr += 8;
+                    }
+                }
+
+                // Color / Intensity (8 bytes/frame)
+                if (offsets.TryGetValue("Color", out uint colOff) && colOff > 0 && counts.TryGetValue("Color", out int colCount) && colCount > 0)
+                {
+                    int cAddr = (int)colOff;
+                    for (int k = 0; k < colCount && cAddr + 8 <= file.Length; k++)
+                    {
+                        int f = ByteConverter.ToInt32(file, cAddr);
+                        data.Color[f] = NinjaColor.FromArgb32(ByteConverter.ToUInt32(file, cAddr + 4));
+                        cAddr += 8;
+                    }
+                }
+
+                if (offsets.TryGetValue("Intensity", out uint intOff) && intOff > 0 && counts.TryGetValue("Intensity", out int intCount) && intCount > 0)
+                {
+                    int inAddr = (int)intOff;
+                    for (int k = 0; k < intCount && inAddr + 8 <= file.Length; k++)
+                    {
+                        int f = ByteConverter.ToInt32(file, inAddr);
+                        data.Intensity[f] = ByteConverter.ToSingle(file, inAddr + 4);
+                        inAddr += 8;
+                    }
+                }
+
+                // Vertex / Normal Morph Tracks
+                if (offsets.TryGetValue("Vertex", out uint vertOff) && vertOff > 0 && counts.TryGetValue("Vertex", out int vertCount) && vertCount > 0)
+                {
+                    int vAddr = (int)vertOff;
+                    List<int> ptrs = new List<int>();
+                    for (int k = 0; k < vertCount && vAddr + 8 <= file.Length; k++)
+                    {
+                        ptrs.Add((int)(ByteConverter.ToUInt32(file, vAddr + 4) - imageBase));
+                        vAddr += 8;
+                    }
+
+                    int vtxCount = (numVerts != null && i < numVerts.Length) ? numVerts[i] : -1;
+                    if (vtxCount < 0 && ptrs.Count > 1) vtxCount = Math.Max(1, (ptrs[1] - ptrs[0]) / 12);
+                    else if (vtxCount < 0 && ptrs.Count > 0) vtxCount = Math.Max(1, (int)(vertOff - ptrs[0]) / 12);
+
+                    vAddr = (int)vertOff;
+                    for (int k = 0; k < vertCount && vAddr + 8 <= file.Length; k++)
+                    {
+                        int f = ByteConverter.ToInt32(file, vAddr);
+                        int dataPtr = (int)(ByteConverter.ToUInt32(file, vAddr + 4) - imageBase);
+                        vAddr += 8;
+
+                        if (dataPtr >= 0 && dataPtr + (vtxCount * 12) <= file.Length)
                         {
-                            if (ShortRot)
+                            Vector3[] verts = new Vector3[vtxCount];
+                            for (int v = 0; v < vtxCount; v++)
                             {
-                                int f = ByteConverter.ToInt16(file, rAddr);
-                                short rx = ByteConverter.ToInt16(file, rAddr + 2);
-                                short ry = ByteConverter.ToInt16(file, rAddr + 4);
-                                short rz = ByteConverter.ToInt16(file, rAddr + 6);
-                                data.Rotation[f] = new NinjaRotation(rx, ry, rz);
-                                rAddr += 8;
+                                verts[v] = new Vector3(
+                                    ByteConverter.ToSingle(file, dataPtr + v * 12),
+                                    ByteConverter.ToSingle(file, dataPtr + v * 12 + 4),
+                                    ByteConverter.ToSingle(file, dataPtr + v * 12 + 8)
+                                );
                             }
-                            else
-                            {
-                                int f = ByteConverter.ToInt32(file, rAddr);
-                                int rx = ByteConverter.ToInt32(file, rAddr + 4);
-                                int ry = ByteConverter.ToInt32(file, rAddr + 8);
-                                int rz = ByteConverter.ToInt32(file, rAddr + 12);
-                                data.Rotation[f] = new NinjaRotation(rx, ry, rz);
-                                rAddr += 16;
-                            }
-                        }
-                    }
-                }
-
-                // 3. Scale Tracks
-                if (Flags.HasFlag(AnimFlags.Scale))
-                {
-                    int kfCount = ByteConverter.ToInt32(file, mdataAddr); mdataAddr += 4;
-                    if (sclOff > 0 && kfCount > 0 && sclOff + kfCount * 16 <= file.Length)
-                    {
-                        int sAddr = (int)sclOff;
-                        for (int k = 0; k < kfCount; k++)
-                        {
-                            int f = ByteConverter.ToInt32(file, sAddr);
-                            Vector3 s = new Vector3(ByteConverter.ToSingle(file, sAddr + 4), ByteConverter.ToSingle(file, sAddr + 8), ByteConverter.ToSingle(file, sAddr + 12));
-                            data.Scale[f] = s;
-                            sAddr += 16;
-                        }
-                    }
-                }
-
-                // 4. Vector Tracks
-                if (Flags.HasFlag(AnimFlags.Vector))
-                {
-                    int kfCount = ByteConverter.ToInt32(file, mdataAddr); mdataAddr += 4;
-                    if (vecOff > 0 && kfCount > 0 && vecOff + kfCount * 16 <= file.Length)
-                    {
-                        int vAddr = (int)vecOff;
-                        for (int k = 0; k < kfCount; k++)
-                        {
-                            int f = ByteConverter.ToInt32(file, vAddr);
-                            Vector3 vec = new Vector3(ByteConverter.ToSingle(file, vAddr + 4), ByteConverter.ToSingle(file, vAddr + 8), ByteConverter.ToSingle(file, vAddr + 12));
-                            data.Vector[f] = vec;
-                            vAddr += 16;
-                        }
-                    }
-                }
-
-                // 5. Vertex Tracks (Morph Targets)
-                if (Flags.HasFlag(AnimFlags.Vertex))
-                {
-                    int kfCount = ByteConverter.ToInt32(file, mdataAddr); mdataAddr += 4;
-                    if (vertOff > 0 && kfCount > 0 && vertOff + kfCount * 8 <= file.Length)
-                    {
-                        int vAddr = (int)vertOff;
-                        List<int> ptrs = new List<int>();
-                        for (int k = 0; k < kfCount; k++)
-                        {
-                            ptrs.Add((int)(ByteConverter.ToUInt32(file, vAddr + 4) - imageBase));
-                            vAddr += 8;
-                        }
-
-                        int vtxCount = (numVerts != null && i < numVerts.Length) ? numVerts[i] : -1;
-                        if (vtxCount < 0 && ptrs.Count > 1)
-                        {
-                            vtxCount = Math.Max(1, (ptrs[1] - ptrs[0]) / 12);
-                        }
-                        else if (vtxCount < 0 && ptrs.Count > 0)
-                        {
-                            vtxCount = Math.Max(1, (int)(vertOff - ptrs[0]) / 12);
-                        }
-
-                        vAddr = (int)vertOff;
-                        for (int k = 0; k < kfCount; k++)
-                        {
-                            int f = ByteConverter.ToInt32(file, vAddr);
-                            int dataPtr = (int)(ByteConverter.ToUInt32(file, vAddr + 4) - imageBase);
-                            vAddr += 8;
-
-                            if (dataPtr >= 0 && dataPtr + (vtxCount * 12) <= file.Length)
-                            {
-                                Vector3[] verts = new Vector3[vtxCount];
-                                for (int v = 0; v < vtxCount; v++)
-                                {
-                                    verts[v] = new Vector3(
-                                        ByteConverter.ToSingle(file, dataPtr + v * 12),
-                                        ByteConverter.ToSingle(file, dataPtr + v * 12 + 4),
-                                        ByteConverter.ToSingle(file, dataPtr + v * 12 + 8)
-                                    );
-                                }
-                                data.Vertex[f] = verts;
-                            }
-                        }
-                    }
-                }
-
-                // 6. Normal Tracks
-                if (Flags.HasFlag(AnimFlags.Normal))
-                {
-                    int kfCount = ByteConverter.ToInt32(file, mdataAddr); mdataAddr += 4;
-                    if (normOff > 0 && kfCount > 0 && normOff + kfCount * 8 <= file.Length)
-                    {
-                        int nAddr = (int)normOff;
-                        List<int> ptrs = new List<int>();
-                        for (int k = 0; k < kfCount; k++)
-                        {
-                            ptrs.Add((int)(ByteConverter.ToUInt32(file, nAddr + 4) - imageBase));
-                            nAddr += 8;
-                        }
-
-                        int nrmCount = (numVerts != null && i < numVerts.Length) ? numVerts[i] : -1;
-                        if (nrmCount < 0 && ptrs.Count > 1)
-                        {
-                            nrmCount = Math.Max(1, (ptrs[1] - ptrs[0]) / 12);
-                        }
-                        else if (nrmCount < 0 && ptrs.Count > 0)
-                        {
-                            nrmCount = Math.Max(1, (int)(normOff - ptrs[0]) / 12);
-                        }
-
-                        nAddr = (int)normOff;
-                        for (int k = 0; k < kfCount; k++)
-                        {
-                            int f = ByteConverter.ToInt32(file, nAddr);
-                            int dataPtr = (int)(ByteConverter.ToUInt32(file, nAddr + 4) - imageBase);
-                            nAddr += 8;
-
-                            if (dataPtr >= 0 && dataPtr + (nrmCount * 12) <= file.Length)
-                            {
-                                Vector3[] norms = new Vector3[nrmCount];
-                                for (int n = 0; n < nrmCount; n++)
-                                {
-                                    norms[n] = new Vector3(
-                                        ByteConverter.ToSingle(file, dataPtr + n * 12),
-                                        ByteConverter.ToSingle(file, dataPtr + n * 12 + 4),
-                                        ByteConverter.ToSingle(file, dataPtr + n * 12 + 8)
-                                    );
-                                }
-                                data.Normal[f] = norms;
-                            }
+                            data.Vertex[f] = verts;
                         }
                     }
                 }
@@ -282,11 +289,27 @@ namespace UnityNinja
             }
         }
 
-        private static uint ReadOffset(byte[] file, ref int cursor, uint imageBase)
+        private static List<string> GetActiveChannels(AnimFlags flags)
         {
-            uint off = ByteConverter.ToUInt32(file, cursor);
-            cursor += 4;
-            return off > 0 ? off - imageBase : 0;
+            List<string> channels = new List<string>();
+            if (flags.HasFlag(AnimFlags.Position)) channels.Add("Position");
+            if (flags.HasFlag(AnimFlags.Rotation)) channels.Add("Rotation");
+            else if (flags.HasFlag(AnimFlags.Quaternion)) channels.Add("Quaternion");
+            else if (flags.HasFlag(AnimFlags.Angle)) channels.Add("Angle");
+            else if (flags.HasFlag(AnimFlags.Roll)) channels.Add("Roll");
+
+            if (flags.HasFlag(AnimFlags.Scale)) channels.Add("Scale");
+            if (flags.HasFlag(AnimFlags.Vector)) channels.Add("Vector");
+            else if (flags.HasFlag(AnimFlags.Target)) channels.Add("Target");
+
+            if (flags.HasFlag(AnimFlags.Vertex)) channels.Add("Vertex");
+            if (flags.HasFlag(AnimFlags.Normal)) channels.Add("Normal");
+            if (flags.HasFlag(AnimFlags.Color)) channels.Add("Color");
+            if (flags.HasFlag(AnimFlags.Intensity)) channels.Add("Intensity");
+            if (flags.HasFlag(AnimFlags.Spot)) channels.Add("Spot");
+            if (flags.HasFlag(AnimFlags.Point)) channels.Add("Point");
+
+            return channels;
         }
 
         private static int CalculateModelParts(byte[] file, int address, uint imageBase, AnimFlags flags)
@@ -294,14 +317,7 @@ namespace UnityNinja
             int mdataPtr = (int)(ByteConverter.ToUInt32(file, address) - imageBase);
             if (mdataPtr <= 0 || mdataPtr >= file.Length) return 1;
 
-            int channelCount = 0;
-            if (flags.HasFlag(AnimFlags.Position)) channelCount++;
-            if (flags.HasFlag(AnimFlags.Rotation)) channelCount++;
-            if (flags.HasFlag(AnimFlags.Scale)) channelCount++;
-            if (flags.HasFlag(AnimFlags.Vector)) channelCount++;
-            if (flags.HasFlag(AnimFlags.Vertex)) channelCount++;
-            if (flags.HasFlag(AnimFlags.Normal)) channelCount++;
-
+            int channelCount = GetActiveChannels(flags).Count;
             int stride = channelCount * 8;
             if (stride == 0) return 1;
 

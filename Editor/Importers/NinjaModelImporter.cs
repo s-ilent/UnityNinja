@@ -87,6 +87,7 @@ namespace UnityNinja.Editor
                                 rootModel,
                                 rootGO,
                                 nodeTransforms,
+                                njFile.Motions,
                                 assetName,
                                 ctx.assetPath,
                                 settings.Scale,

@@ -27,10 +27,9 @@ namespace UnityNinja.Editor
             ChunkVertexEntry[] globalChunkVertexBuffer = new ChunkVertexEntry[32768];
             bool isSkinnedHierarchy = HasSkinning(rootObject);
 
-            // Reset material deduplication cache before resolving tree
             NinjaMaterialResolver.ResetMaterialCache();
 
-            BuildNode(rootObject, rootGO.transform, rootName, modelFolder, settings, texNameList, ctx, nodeTransforms, globalChunkVertexBuffer);
+            BuildNode(rootObject, rootGO.transform, rootName, modelFolder, settings, texNameList, ctx, nodeTransforms, globalChunkVertexBuffer, Matrix4x4.identity, isSkinnedHierarchy, 0);
 
             if (isSkinnedHierarchy)
             {
@@ -50,7 +49,7 @@ namespace UnityNinja.Editor
             return false;
         }
 
-        private static void BuildNode(
+        private static int BuildNode(
             NJS_OBJECT node,
             Transform parentTransform,
             string assetName,
@@ -59,18 +58,30 @@ namespace UnityNinja.Editor
             string[] texNameList,
             AssetImportContext ctx,
             List<Transform> nodeTransforms,
-            ChunkVertexEntry[] globalChunkVertexBuffer)
+            ChunkVertexEntry[] globalChunkVertexBuffer,
+            Matrix4x4 parentMatrix,
+            bool isSkinnedHierarchy,
+            int nodeIndex)
         {
-            if (node == null) return;
+            if (node == null) return nodeIndex;
 
             GameObject nodeGO = new GameObject(node.Name);
             nodeGO.transform.SetParent(parentTransform, false);
 
-            nodeGO.transform.localPosition = NinjaCoordinateUtility.ToUnityPosition(node.Position, settings.Scale);
-            nodeGO.transform.localEulerAngles = NinjaCoordinateUtility.ToUnityEuler(node.Rotation);
-            nodeGO.transform.localScale = (node.Scale == Vector3.zero) ? Vector3.one : node.Scale;
+            Vector3 localPos = NinjaCoordinateUtility.ToUnityPosition(node.Position, settings.Scale);
+            Vector3 localEuler = NinjaCoordinateUtility.ToUnityEuler(node.Rotation);
+            Vector3 localScale = (node.Scale == Vector3.zero) ? Vector3.one : node.Scale;
 
+            nodeGO.transform.localPosition = localPos;
+            nodeGO.transform.localEulerAngles = localEuler;
+            nodeGO.transform.localScale = localScale;
+
+            Matrix4x4 localMat = Matrix4x4.TRS(localPos, Quaternion.Euler(localEuler), localScale);
+            Matrix4x4 currentModelMatrix = parentMatrix * localMat;
+
+            int currentNodeIdx = nodeTransforms.Count;
             nodeTransforms.Add(nodeGO.transform);
+            int nextIndex = nodeIndex + 1;
 
             // Mesh Attachment & Material Assignment
             if (node.Attach != null && !node.SkipDraw)
@@ -105,9 +116,13 @@ namespace UnityNinja.Editor
                         modelFolder,
                         texNameList,
                         globalChunkVertexBuffer,
+                        currentNodeIdx,
+                        currentModelMatrix,
+                        isSkinnedHierarchy,
                         settings,
                         ctx,
-                        out mats
+                        out mats,
+                        out weights
                     );
                 }
                 else if (node.Attach is GCAttach gc)
@@ -120,6 +135,7 @@ namespace UnityNinja.Editor
                         assetName,
                         modelFolder,
                         texNameList,
+                        currentNodeIdx,
                         settings,
                         ctx,
                         out mats,
@@ -141,13 +157,26 @@ namespace UnityNinja.Editor
                         out mats
                     );
                 }
-
+                
                 if (mesh != null)
                 {
                     ctx?.AddObjectToAsset($"Mesh_{node.Name}", mesh);
 
                     if (weights != null && weights.Length > 0)
                     {
+                        // Transform mesh vertices from Root Model Space into nodeGO local space so rest-pose skinning is exact
+                        Matrix4x4 modelToNode = currentModelMatrix.inverse;
+                        Vector3[] localVerts = mesh.vertices;
+                        Vector3[] localNorms = mesh.normals;
+                        for (int v = 0; v < localVerts.Length; v++)
+                        {
+                            localVerts[v] = modelToNode.MultiplyPoint3x4(localVerts[v]);
+                            localNorms[v] = modelToNode.MultiplyVector(localNorms[v]).normalized;
+                        }
+                        mesh.vertices = localVerts;
+                        mesh.normals = localNorms;
+                        mesh.RecalculateBounds();
+
                         SkinnedMeshRenderer smr = nodeGO.AddComponent<SkinnedMeshRenderer>();
                         smr.sharedMesh = mesh;
                         smr.sharedMaterials = mats;
@@ -173,25 +202,33 @@ namespace UnityNinja.Editor
             {
                 foreach (var child in node.Children)
                 {
-                    BuildNode(child, nodeGO.transform, assetName, modelFolder, settings, texNameList, ctx, nodeTransforms, globalChunkVertexBuffer);
+                    nextIndex = BuildNode(child, nodeGO.transform, assetName, modelFolder, settings, texNameList, ctx, nodeTransforms, globalChunkVertexBuffer, currentModelMatrix, isSkinnedHierarchy, nextIndex);
                 }
             }
+
+            if (node.Parent == null && node.Sibling != null)
+            {
+                nextIndex = BuildNode(node.Sibling, parentTransform, assetName, modelFolder, settings, texNameList, ctx, nodeTransforms, globalChunkVertexBuffer, parentMatrix, isSkinnedHierarchy, nextIndex);
+            }
+
+            return nextIndex;
         }
 
         private static void SetupSkeletonBindPoses(GameObject rootGO, List<Transform> nodeTransforms)
         {
             Transform[] bones = nodeTransforms.ToArray();
-            Matrix4x4[] bindposes = new Matrix4x4[bones.Length];
-
-            for (int b = 0; b < bones.Length; b++)
-            {
-                bindposes[b] = bones[b].worldToLocalMatrix * rootGO.transform.localToWorldMatrix;
-            }
 
             foreach (var smr in rootGO.GetComponentsInChildren<SkinnedMeshRenderer>())
             {
                 if (smr.sharedMesh != null)
                 {
+                    Matrix4x4[] bindposes = new Matrix4x4[bones.Length];
+                    for (int b = 0; b < bones.Length; b++)
+                    {
+                        // Transform from the SkinnedMeshRenderer GameObject space into bone space
+                        bindposes[b] = bones[b].worldToLocalMatrix * smr.transform.localToWorldMatrix;
+                    }
+
                     smr.sharedMesh.bindposes = bindposes;
                     smr.bones = bones;
                     smr.rootBone = bones.Length > 0 ? bones[0] : rootGO.transform;

@@ -17,6 +17,7 @@ namespace UnityNinja.Editor
             NJS_OBJECT rootModel,
             GameObject rootGO,
             List<Transform> nodeTransforms,
+            List<NJS_MOTION> embeddedMotions,
             string assetName,
             string assetPath,
             float scale,
@@ -27,45 +28,43 @@ namespace UnityNinja.Editor
             string[] paths = NinjaMotionResolver.ComputeNodeHierarchyPaths(rootModel);
             List<AnimationClip> loadedClips = new List<AnimationClip>();
 
-            string baseDir = Path.GetDirectoryName(assetPath);
-
-            // Discover companion animation files
-            foreach (string ext in MotionExtensions)
+            // 1. Process Embedded Animations (.nj file containing NMDM / NSSM chunks)
+            if (embeddedMotions != null && embeddedMotions.Count > 0)
             {
-                string candidate = Path.Combine(baseDir, assetName + ext).Replace('\\', '/');
-                if (File.Exists(candidate))
+                for (int i = 0; i < embeddedMotions.Count; i++)
                 {
-                    try
-                    {
-                        byte[] rawBytes = File.ReadAllBytes(candidate);
-                        NinjaBinaryFile motFile = new NinjaBinaryFile(rawBytes);
+                    string clipName = $"{assetName}_Motion_{i}";
+                    AnimationClip clip = NinjaMotionResolver.ResolveMotion(
+                        embeddedMotions[i],
+                        clipName,
+                        scale,
+                        paths,
+                        nodeTransforms
+                    );
 
-                        for (int i = 0; i < motFile.Motions.Count; i++)
-                        {
-                            string clipName = $"{assetName}_Motion_{i}";
-                            AnimationClip clip = NinjaMotionResolver.ResolveMotion(
-                                motFile.Motions[i],
-                                clipName,
-                                scale,
-                                paths,
-                                nodeTransforms
-                            );
-
-                            if (clip != null)
-                            {
-                                ctx.DependsOnSourceAsset(candidate);
-                                ctx.AddObjectToAsset($"Motion_{i}", clip);
-                                loadedClips.Add(clip);
-                            }
-                        }
-                    }
-                    catch (Exception ex)
+                    if (clip != null)
                     {
-                        Debug.LogWarning($"[NinjaAnimatorResolver] Failed loading motion {candidate}: {ex.Message}");
+                        ctx.AddObjectToAsset($"Embedded_Motion_{i}", clip);
+                        loadedClips.Add(clip);
                     }
                 }
             }
 
+            // 2. Discover Companion Animation Files in same directory
+            string baseDir = Path.GetDirectoryName(assetPath);
+            if (!string.IsNullOrEmpty(baseDir) && Directory.Exists(baseDir))
+            {
+                foreach (string ext in MotionExtensions)
+                {
+                    string candidate = Path.Combine(baseDir, assetName + ext).Replace('\\', '/');
+                    if (File.Exists(candidate))
+                    {
+                        LoadClipsFromFile(candidate, assetName, scale, paths, nodeTransforms, loadedClips, ctx);
+                    }
+                }
+            }
+
+            // 3. Build and Attach Animator Controller
             if (loadedClips.Count > 0)
             {
                 Animator animator = rootGO.AddComponent<Animator>();
@@ -86,6 +85,45 @@ namespace UnityNinja.Editor
                 }
 
                 animator.runtimeAnimatorController = controller;
+            }
+        }
+
+        private static void LoadClipsFromFile(
+            string filePath,
+            string assetName,
+            float scale,
+            string[] paths,
+            List<Transform> nodeTransforms,
+            List<AnimationClip> loadedClips,
+            AssetImportContext ctx)
+        {
+            try
+            {
+                byte[] rawBytes = File.ReadAllBytes(filePath);
+                NinjaBinaryFile motFile = new NinjaBinaryFile(rawBytes);
+
+                for (int i = 0; i < motFile.Motions.Count; i++)
+                {
+                    string clipName = $"{Path.GetFileNameWithoutExtension(filePath)}_{i}";
+                    AnimationClip clip = NinjaMotionResolver.ResolveMotion(
+                        motFile.Motions[i],
+                        clipName,
+                        scale,
+                        paths,
+                        nodeTransforms
+                    );
+
+                    if (clip != null)
+                    {
+                        ctx.DependsOnSourceAsset(filePath);
+                        ctx.AddObjectToAsset($"Motion_{loadedClips.Count}_{clipName}", clip);
+                        loadedClips.Add(clip);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[NinjaAnimatorResolver] Failed loading motion {filePath}: {ex.Message}");
             }
         }
     }
