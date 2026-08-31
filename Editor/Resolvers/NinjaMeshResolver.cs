@@ -7,6 +7,14 @@ using UnityNinja.XJ;
 
 namespace UnityNinja.Editor
 {
+    public struct ChunkVertexEntry
+    {
+        public Vector3 Position;
+        public Vector3 Normal;
+        public Color32 Color;
+        public bool HasValue;
+    }
+
     public static class NinjaMeshResolver
     {
         #region 1. Basic Attach (NJS_MODEL / NJBM)
@@ -16,72 +24,85 @@ namespace UnityNinja.Editor
             if (attach?.Vertices == null || attach.Vertices.Length == 0 || attach.MeshSets.Count == 0)
                 return null;
 
-            Vector3[] positions = new Vector3[attach.Vertices.Length];
-            Vector3[] normals = new Vector3[attach.Vertices.Length];
-
-            for (int i = 0; i < attach.Vertices.Length; i++)
-            {
-                positions[i] = NinjaCoordinateUtility.ToUnityPosition(attach.Vertices[i].ToVector3(), scale);
-                normals[i] = (attach.Normals != null && i < attach.Normals.Length && attach.Normals[i] != null)
-                    ? NinjaCoordinateUtility.ToUnityNormal(attach.Normals[i].ToVector3())
-                    : Vector3.up;
-            }
+            List<Vector3> localPositions = new List<Vector3>();
+            List<Vector3> localNormals = new List<Vector3>();
+            List<Vector2> localUVs = new List<Vector2>();
+            List<Color32> localColors = new List<Color32>();
 
             List<List<int>> submeshTriangles = new List<List<int>>();
-            List<Vector2> perVertexUVs = new List<Vector2>(new Vector2[positions.Length]);
-            List<Color32> perVertexColors = new List<Color32>(new Color32[positions.Length]);
-            for (int i = 0; i < perVertexColors.Count; i++) perVertexColors[i] = new Color32(255, 255, 255, 255);
-
-            Material defaultMat = new Material(Shader.Find("Standard"));
             List<Material> matList = new List<Material>();
+            Material defaultMat = new Material(Shader.Find("Standard"));
 
             foreach (var meshSet in attach.MeshSets)
             {
                 List<int> tris = new List<int>();
                 int uvCursor = 0;
+                int colCursor = 0;
 
                 foreach (var poly in meshSet.Polys)
                 {
-                    if (poly is NinjaTriangle t)
-                    {
-                        tris.Add(t.Indexes[0]);
-                        tris.Add(t.Indexes[2]);
-                        tris.Add(t.Indexes[1]);
+                    int polyVertCount = poly.Indexes.Length;
+                    int[] localIdxs = new int[polyVertCount];
 
-                        if (meshSet.UVs != null && uvCursor + 2 < meshSet.UVs.Length)
-                        {
-                            perVertexUVs[t.Indexes[0]] = NinjaCoordinateUtility.ToUnityUV(meshSet.UVs[uvCursor].ToVector2());
-                            perVertexUVs[t.Indexes[1]] = NinjaCoordinateUtility.ToUnityUV(meshSet.UVs[uvCursor + 1].ToVector2());
-                            perVertexUVs[t.Indexes[2]] = NinjaCoordinateUtility.ToUnityUV(meshSet.UVs[uvCursor + 2].ToVector2());
-                        }
-                        uvCursor += 3;
-                    }
-                    else if (poly is NinjaQuad q)
+                    for (int i = 0; i < polyVertCount; i++)
                     {
-                        tris.Add(q.Indexes[0]); tris.Add(q.Indexes[2]); tris.Add(q.Indexes[1]);
-                        tris.Add(q.Indexes[0]); tris.Add(q.Indexes[3]); tris.Add(q.Indexes[2]);
-                        uvCursor += 4;
+                        int gIdx = poly.Indexes[i];
+                        Vector3 pos = (gIdx >= 0 && gIdx < attach.Vertices.Length)
+                            ? NinjaCoordinateUtility.ToUnityPosition(attach.Vertices[gIdx].ToVector3(), scale)
+                            : Vector3.zero;
+
+                        Vector3 norm = (attach.Normals != null && gIdx >= 0 && gIdx < attach.Normals.Length && attach.Normals[gIdx] != null)
+                            ? NinjaCoordinateUtility.ToUnityNormal(attach.Normals[gIdx].ToVector3())
+                            : Vector3.up;
+
+                        Vector2 uv = (meshSet.UVs != null && uvCursor < meshSet.UVs.Length && meshSet.UVs[uvCursor] != null)
+                            ? NinjaCoordinateUtility.ToUnityUV(meshSet.UVs[uvCursor].ToVector2())
+                            : Vector2.zero;
+
+                        Color32 col = (meshSet.VertexColors != null && colCursor < meshSet.VertexColors.Length)
+                            ? meshSet.VertexColors[colCursor]
+                            : new Color32(255, 255, 255, 255);
+
+                        localIdxs[i] = localPositions.Count;
+                        localPositions.Add(pos);
+                        localNormals.Add(norm);
+                        localUVs.Add(uv);
+                        localColors.Add(col);
+
+                        uvCursor++;
+                        colCursor++;
+                    }
+
+                    if (poly is NinjaTriangle)
+                    {
+                        tris.Add(localIdxs[0]);
+                        tris.Add(localIdxs[2]);
+                        tris.Add(localIdxs[1]);
+                    }
+                    else if (poly is NinjaQuad)
+                    {
+                        tris.Add(localIdxs[0]); tris.Add(localIdxs[2]); tris.Add(localIdxs[1]);
+                        tris.Add(localIdxs[0]); tris.Add(localIdxs[3]); tris.Add(localIdxs[2]);
                     }
                     else if (poly is NinjaStrip s)
                     {
                         bool flip = !s.Reversed;
-                        for (int k = 0; k < s.Indexes.Length - 2; k++)
+                        for (int k = 0; k < polyVertCount - 2; k++)
                         {
                             if (flip)
                             {
-                                tris.Add(s.Indexes[k]);
-                                tris.Add(s.Indexes[k + 2]);
-                                tris.Add(s.Indexes[k + 1]);
+                                tris.Add(localIdxs[k]);
+                                tris.Add(localIdxs[k + 2]);
+                                tris.Add(localIdxs[k + 1]);
                             }
                             else
                             {
-                                tris.Add(s.Indexes[k + 1]);
-                                tris.Add(s.Indexes[k + 2]);
-                                tris.Add(s.Indexes[k]);
+                                tris.Add(localIdxs[k + 1]);
+                                tris.Add(localIdxs[k + 2]);
+                                tris.Add(localIdxs[k]);
                             }
                             flip = !flip;
                         }
-                        uvCursor += s.Indexes.Length;
                     }
                 }
 
@@ -92,13 +113,15 @@ namespace UnityNinja.Editor
                 }
             }
 
-            Mesh mesh = new Mesh { name = name };
-            if (positions.Length > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+            if (localPositions.Count == 0 || submeshTriangles.Count == 0) return null;
 
-            mesh.vertices = positions;
-            mesh.normals = normals;
-            mesh.uv = perVertexUVs.ToArray();
-            mesh.colors32 = perVertexColors.ToArray();
+            Mesh mesh = new Mesh { name = name };
+            if (localPositions.Count > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+
+            mesh.vertices = localPositions.ToArray();
+            mesh.normals = localNormals.ToArray();
+            mesh.uv = localUVs.ToArray();
+            mesh.colors32 = localColors.ToArray();
 
             mesh.subMeshCount = submeshTriangles.Count;
             for (int i = 0; i < submeshTriangles.Count; i++)
@@ -113,40 +136,51 @@ namespace UnityNinja.Editor
         #endregion
 
         #region 2. Chunk Attach (NJS_CNK_MODEL / NJCM)
-        public static Mesh CreateMeshFromChunkAttach(ChunkAttach attach, float scale, string name, out Material[] materials)
+        public static Mesh CreateMeshFromChunkAttach(
+            ChunkAttach attach,
+            float scale,
+            string name,
+            ChunkVertexEntry[] globalVertexBuffer,
+            out Material[] materials)
         {
             materials = Array.Empty<Material>();
-            if (attach?.VertexChunks == null || attach.VertexChunks.Count == 0) return null;
+            if (attach == null) return null;
 
-            List<Vector3> positions = new List<Vector3>();
-            List<Vector3> normals = new List<Vector3>();
-            List<Color32> colors = new List<Color32>();
-
-            foreach (var vc in attach.VertexChunks)
+            // 1. Upload vertices declared on this attach into the global vertex pool
+            if (attach.VertexChunks != null)
             {
-                int targetSize = vc.IndexOffset + vc.VertexCount;
-                while (positions.Count < targetSize)
+                foreach (var vc in attach.VertexChunks)
                 {
-                    positions.Add(Vector3.zero);
-                    normals.Add(Vector3.up);
-                    colors.Add(new Color32(255, 255, 255, 255));
-                }
+                    for (int i = 0; i < vc.VertexCount; i++)
+                    {
+                        int targetIdx = vc.IndexOffset + i;
+                        if (targetIdx >= 0 && targetIdx < globalVertexBuffer.Length)
+                        {
+                            Vector3 pos = NinjaCoordinateUtility.ToUnityPosition(vc.Vertices[i], scale);
+                            Vector3 norm = (i < vc.Normals.Count) ? NinjaCoordinateUtility.ToUnityNormal(vc.Normals[i]) : Vector3.up;
+                            Color32 col = (i < vc.Diffuse.Count) ? vc.Diffuse[i] : new Color32(255, 255, 255, 255);
 
-                for (int i = 0; i < vc.VertexCount; i++)
-                {
-                    int dst = vc.IndexOffset + i;
-                    positions[dst] = NinjaCoordinateUtility.ToUnityPosition(vc.Vertices[i], scale);
-                    if (i < vc.Normals.Count)
-                        normals[dst] = NinjaCoordinateUtility.ToUnityNormal(vc.Normals[i]);
-                    if (i < vc.Diffuse.Count)
-                        colors[dst] = vc.Diffuse[i];
+                            globalVertexBuffer[targetIdx] = new ChunkVertexEntry
+                            {
+                                Position = pos,
+                                Normal = norm,
+                                Color = col,
+                                HasValue = true
+                            };
+                        }
+                    }
                 }
             }
 
-            if (positions.Count == 0) return null;
+            if (attach.PolyChunks == null || attach.PolyChunks.Count == 0) return null;
+
+            // 2. Build local vertex buffer for this mesh by reading from global pool
+            List<Vector3> localPositions = new List<Vector3>();
+            List<Vector3> localNormals = new List<Vector3>();
+            List<Color32> localColors = new List<Color32>();
+            List<Vector2> localUVs = new List<Vector2>();
 
             List<List<int>> submeshes = new List<List<int>>();
-            List<Vector2> perVertexUVs = new List<Vector2>(new Vector2[positions.Count]);
             List<int> currentTriangles = new List<int>();
 
             foreach (var pc in attach.PolyChunks)
@@ -155,12 +189,43 @@ namespace UnityNinja.Editor
                 {
                     foreach (var strip in stripChunk.Strips)
                     {
-                        bool flip = !strip.Reversed;
-                        for (int k = 0; k < strip.Indexes.Length - 2; k++)
+                        if (strip.Indexes == null || strip.Indexes.Length < 3) continue;
+
+                        int stripLen = strip.Indexes.Length;
+                        int[] localIndices = new int[stripLen];
+
+                        for (int k = 0; k < stripLen; k++)
                         {
-                            ushort v0 = strip.Indexes[k];
-                            ushort v1 = strip.Indexes[k + 1];
-                            ushort v2 = strip.Indexes[k + 2];
+                            int gIdx = strip.Indexes[k];
+                            Vector3 pos = (gIdx >= 0 && gIdx < globalVertexBuffer.Length && globalVertexBuffer[gIdx].HasValue)
+                                ? globalVertexBuffer[gIdx].Position
+                                : Vector3.zero;
+
+                            Vector3 norm = (gIdx >= 0 && gIdx < globalVertexBuffer.Length && globalVertexBuffer[gIdx].HasValue)
+                                ? globalVertexBuffer[gIdx].Normal
+                                : Vector3.up;
+
+                            Color32 col = (strip.Colors != null && k < strip.Colors.Length)
+                                ? strip.Colors[k]
+                                : ((gIdx >= 0 && gIdx < globalVertexBuffer.Length && globalVertexBuffer[gIdx].HasValue) ? globalVertexBuffer[gIdx].Color : new Color32(255, 255, 255, 255));
+
+                            Vector2 uv = (strip.UVs != null && k < strip.UVs.Length)
+                                ? NinjaCoordinateUtility.ToUnityUV(strip.UVs[k])
+                                : Vector2.zero;
+
+                            localIndices[k] = localPositions.Count;
+                            localPositions.Add(pos);
+                            localNormals.Add(norm);
+                            localColors.Add(col);
+                            localUVs.Add(uv);
+                        }
+
+                        bool flip = !strip.Reversed;
+                        for (int k = 0; k < stripLen - 2; k++)
+                        {
+                            int v0 = localIndices[k];
+                            int v1 = localIndices[k + 1];
+                            int v2 = localIndices[k + 2];
 
                             if (v0 != v1 && v1 != v2 && v0 != v2)
                             {
@@ -175,30 +240,24 @@ namespace UnityNinja.Editor
                             }
                             flip = !flip;
                         }
-
-                        if (strip.UVs != null)
-                        {
-                            for (int u = 0; u < strip.Indexes.Length && u < strip.UVs.Length; u++)
-                            {
-                                int idx = strip.Indexes[u];
-                                if (idx < perVertexUVs.Count)
-                                    perVertexUVs[idx] = NinjaCoordinateUtility.ToUnityUV(strip.UVs[u]);
-                            }
-                        }
                     }
                 }
             }
 
             if (currentTriangles.Count > 0)
+            {
                 submeshes.Add(currentTriangles);
+            }
+
+            if (localPositions.Count == 0 || submeshes.Count == 0) return null;
 
             Mesh mesh = new Mesh { name = name };
-            if (positions.Count > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+            if (localPositions.Count > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
 
-            mesh.vertices = positions.ToArray();
-            mesh.normals = normals.ToArray();
-            mesh.colors32 = colors.ToArray();
-            mesh.uv = perVertexUVs.ToArray();
+            mesh.vertices = localPositions.ToArray();
+            mesh.normals = localNormals.ToArray();
+            mesh.colors32 = localColors.ToArray();
+            mesh.uv = localUVs.ToArray();
 
             mesh.subMeshCount = submeshes.Count;
             for (int i = 0; i < submeshes.Count; i++)
@@ -254,11 +313,7 @@ namespace UnityNinja.Editor
                     if (skinSet.ElementType == GCSkinAttribute.StaticWeight)
                     {
                         for (int i = 0; i < skinSet.IndexCount; i++)
-                        {
-                            int vIdx = skinSet.StartingIndex + i;
-                            if (vIdx < boneWeights.Length)
-                                boneWeights[vIdx] = new BoneWeight { boneIndex0 = 0, weight0 = 1.0f };
-                        }
+                            boneWeights[skinSet.StartingIndex + i] = new BoneWeight { boneIndex0 = 0, weight0 = 1.0f };
                     }
                     else if (skinSet.ElementType is GCSkinAttribute.PartialWeightStart or GCSkinAttribute.PartialWeight)
                     {

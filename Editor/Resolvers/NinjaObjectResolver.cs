@@ -22,10 +22,12 @@ namespace UnityNinja.Editor
 
             GameObject rootGO = new GameObject(rootName);
 
-            // Check if hierarchy contains weighted mesh skinning
+            // Persistent 32K hardware vertex pool for Chunk models across the hierarchy
+            ChunkVertexEntry[] globalChunkVertexBuffer = new ChunkVertexEntry[32768];
+
             bool isSkinnedHierarchy = HasSkinning(rootObject);
 
-            BuildNode(rootObject, rootGO.transform, scale, generateColliders, ctx, nodeTransforms);
+            BuildNode(rootObject, rootGO.transform, scale, generateColliders, ctx, nodeTransforms, globalChunkVertexBuffer);
 
             if (isSkinnedHierarchy)
             {
@@ -51,7 +53,8 @@ namespace UnityNinja.Editor
             float scale,
             bool generateColliders,
             AssetImportContext ctx,
-            List<Transform> nodeTransforms)
+            List<Transform> nodeTransforms,
+            ChunkVertexEntry[] globalChunkVertexBuffer)
         {
             if (node == null) return;
 
@@ -77,7 +80,7 @@ namespace UnityNinja.Editor
                 }
                 else if (node.Attach is ChunkAttach chunk)
                 {
-                    mesh = NinjaMeshResolver.CreateMeshFromChunkAttach(chunk, scale, $"{node.Name}_Mesh", out mats);
+                    mesh = NinjaMeshResolver.CreateMeshFromChunkAttach(chunk, scale, $"{node.Name}_Mesh", globalChunkVertexBuffer, out mats);
                 }
                 else if (node.Attach is GCAttach gc)
                 {
@@ -115,12 +118,11 @@ namespace UnityNinja.Editor
                 }
             }
 
-            // Process children
             if (!node.SkipChildren)
             {
                 foreach (var child in node.Children)
                 {
-                    BuildNode(child, nodeGO.transform, scale, generateColliders, ctx, nodeTransforms);
+                    BuildNode(child, nodeGO.transform, scale, generateColliders, ctx, nodeTransforms, globalChunkVertexBuffer);
                 }
             }
         }
