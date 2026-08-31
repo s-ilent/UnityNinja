@@ -21,6 +21,7 @@ namespace UnityNinja.Editor
         private SerializedProperty m_TextureSearchPathsProp;
         private SerializedProperty m_MaterialRemapsProp;
         private SerializedProperty m_TextureRemapsProp;
+        private SerializedProperty m_TransparencyAsCoverageProp;
         private SerializedProperty m_ImportAnimationProp;
 
         private int m_SelectedTab = 0;
@@ -39,6 +40,7 @@ namespace UnityNinja.Editor
             m_TextureSearchPathsProp = serializedObject.FindProperty("m_TextureSearchPaths");
             m_MaterialRemapsProp = serializedObject.FindProperty("m_MaterialRemaps");
             m_TextureRemapsProp = serializedObject.FindProperty("m_TextureRemaps");
+            m_TransparencyAsCoverageProp = serializedObject.FindProperty("m_TransparencyAsCoverage");
             m_ImportAnimationProp = serializedObject.FindProperty("m_ImportAnimation");
         }
 
@@ -66,6 +68,8 @@ namespace UnityNinja.Editor
                     {
                         EditorGUI.indentLevel++;
                         EditorGUILayout.PropertyField(m_DeduplicateMaterialsProp, new GUIContent("Deduplicate Materials"));
+                        EditorGUILayout.PropertyField(m_TransparencyAsCoverageProp, new GUIContent("Transparency as Coverage (Dreamcast OIT)"));
+
                         EditorGUILayout.PropertyField(m_MaterialLocationProp, new GUIContent("Location"));
                         EditorGUILayout.PropertyField(m_MaterialNamingProp, new GUIContent("Naming Mode"));
 

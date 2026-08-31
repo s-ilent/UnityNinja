@@ -28,6 +28,9 @@ namespace UnityNinja.Editor
         public List<MaterialRemapEntry> m_MaterialRemaps = new List<MaterialRemapEntry>();
         public List<TextureRemapEntry> m_TextureRemaps = new List<TextureRemapEntry>();
 
+        [Tooltip("Converts alpha-blended materials into Alpha-to-Coverage (MSAA) cutout with depth writes, emulating Dreamcast PowerVR order-independent transparency without sort artifacts.")]
+        public bool m_TransparencyAsCoverage = false;
+
         [Header("Animation")]
         public bool m_ImportAnimation = true;
 
@@ -44,6 +47,7 @@ namespace UnityNinja.Editor
             TextureSearchPaths = m_TextureSearchPaths ?? Array.Empty<string>(),
             MaterialRemaps = m_MaterialRemaps,
             TextureRemaps = m_TextureRemaps,
+            TransparencyAsCoverage = m_TransparencyAsCoverage,
             ImportAnimation = m_ImportAnimation
         };
 

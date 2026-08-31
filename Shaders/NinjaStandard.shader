@@ -13,8 +13,12 @@ Shader "Ninja/Standard"
         _SpecColor ("Specular Color", Color) = (0, 0, 0, 1)
         _Shininess ("Shininess / Exponent", Range(0, 1)) = 0.0
 
-        // Environment Mapping Flag (0x400000)
-        [ToggleUI] _UseEnvMap ("Environment Mapping (Spherical Normal)", Float) = 0.0
+        // Environment Reflection (Spherical Normal Mapping)
+        [ToggleUI] _UseEnvMap ("Base Texture as EnvMap (Replace UVs)", Float) = 0.0
+        [ToggleUI] _AddEnvMap ("Add Second Layer EnvMap Reflection", Float) = 0.0
+        _EnvMap ("Reflection Map", 2D) = "black" {}
+        _EnvColor ("Reflection Color", Color) = (1,1,1,1)
+        _EnvPower ("Reflection Intensity", Float) = 1.0
 
         // UV Clamping & Mirror / Flipping Flags (TileMode)
         [ToggleUI] _ClampU ("Clamp U", Float) = 0.0
@@ -22,7 +26,7 @@ Shader "Ninja/Standard"
         [ToggleUI] _FlipU ("Flip / Mirror U", Float) = 0.0
         [ToggleUI] _FlipV ("Flip / Mirror V", Float) = 0.0
 
-        // Raw Metadata Flags
+        // Raw Metadata Flags (Bitmask)
         _MaterialFlags ("Ninja Material Flags", Float) = 0.0
 
         // Rendering Pipeline States
@@ -35,6 +39,7 @@ Shader "Ninja/Standard"
         [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull Mode", Float) = 0.0
         [Queue] _CustomRenderQueue ("Custom Render Queue", Float) = -1.0
         [ToggleUI] _Unlit ("Unlit Mode", Float) = 0.0
+        [ToggleUI] _AlphaToMask ("Alpha to Coverage", Float) = 0.0
     }
 
     SubShader
@@ -53,6 +58,7 @@ Shader "Ninja/Standard"
             BlendOp [_BlendOp]
             ZWrite [_ZWrite]
             ZTest [_ZTest]
+            AlphaToMask [_AlphaToMask]
 
             CGPROGRAM
             #ifndef UNITY_PASS_FORWARDBASE
@@ -82,6 +88,7 @@ Shader "Ninja/Standard"
             BlendOp [_BlendOp]
             ZWrite Off
             ZTest LEqual
+            AlphaToMask [_AlphaToMask]
 
             CGPROGRAM
             #ifndef UNITY_PASS_FORWARDADD
@@ -108,6 +115,7 @@ Shader "Ninja/Standard"
             Tags { "LightMode" = "ShadowCaster" }
 
             ZWrite On ZTest LEqual
+            AlphaToMask Off
 
             CGPROGRAM
             #pragma vertex vertShadowCaster

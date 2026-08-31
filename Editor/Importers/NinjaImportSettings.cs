@@ -38,6 +38,9 @@ namespace UnityNinja.Editor
         public List<MaterialRemapEntry> MaterialRemaps = new List<MaterialRemapEntry>();
         public List<TextureRemapEntry> TextureRemaps = new List<TextureRemapEntry>();
 
+        // Transparency & Dreamcast OIT Emulation
+        public bool TransparencyAsCoverage = false;
+
         // Animation
         public bool ImportAnimation = true;
 

@@ -80,7 +80,6 @@ namespace UnityNinja
             int mdataAddr = (int)(ByteConverter.ToUInt32(file, address) - imageBase);
             if (mdataAddr < 0 || mdataAddr >= file.Length) return;
 
-            // Resolve Sega Ninja channel order for NJS_MDATA
             List<string> activeChannels = GetActiveChannels(Flags);
             int channelCount = activeChannels.Count;
 

@@ -237,6 +237,7 @@ namespace UnityNinja.Editor
             if (attach == null) return null;
 
             // 1. Upload vertices & bone weights into global pool
+            // Inside CreateMeshFromChunkAttach:
             if (attach.VertexChunks != null)
             {
                 foreach (var vc in attach.VertexChunks)

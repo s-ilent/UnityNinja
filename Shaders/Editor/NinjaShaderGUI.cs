@@ -1,8 +1,23 @@
+using System;
 using UnityEngine;
 using UnityEditor;
 
 namespace UnityNinja.Editor
 {
+    [Flags]
+    public enum NJSMaterialFlags : uint
+    {
+        ClampV         = 0x8000,
+        ClampU         = 0x10000,
+        FlipV          = 0x20000,
+        FlipU          = 0x40000,
+        UseAlpha       = 0x100000,
+        UseTexture     = 0x200000,
+        EnvironmentMap = 0x400000,
+        DoubleSided    = 0x800000,
+        IgnoreLighting = 0x2000000
+    }
+
     public class NinjaShaderGUI : ShaderGUI
     {
         public enum RenderMode
@@ -31,12 +46,18 @@ namespace UnityNinja.Editor
         private MaterialProperty mainTexProp;
         private MaterialProperty alphaTestProp;
         private MaterialProperty cutoffProp;
+        private MaterialProperty alphaToMaskProp;
 
         private MaterialProperty specColorProp;
         private MaterialProperty shininessProp;
         private MaterialProperty unlitProp;
 
         private MaterialProperty useEnvMapProp;
+        private MaterialProperty addEnvMapProp;
+        private MaterialProperty envMapProp;
+        private MaterialProperty envColorProp;
+        private MaterialProperty envPowerProp;
+
         private MaterialProperty clampUProp;
         private MaterialProperty clampVProp;
         private MaterialProperty flipUProp;
@@ -60,12 +81,18 @@ namespace UnityNinja.Editor
             mainTexProp = FindProperty("_MainTex", props, false);
             alphaTestProp = FindProperty("_AlphaTest", props, false);
             cutoffProp = FindProperty("_Cutoff", props, false);
+            alphaToMaskProp = FindProperty("_AlphaToMask", props, false);
 
             specColorProp = FindProperty("_SpecColor", props, false);
             shininessProp = FindProperty("_Shininess", props, false);
             unlitProp = FindProperty("_Unlit", props, false);
 
             useEnvMapProp = FindProperty("_UseEnvMap", props, false);
+            addEnvMapProp = FindProperty("_AddEnvMap", props, false);
+            envMapProp = FindProperty("_EnvMap", props, false);
+            envColorProp = FindProperty("_EnvColor", props, false);
+            envPowerProp = FindProperty("_EnvPower", props, false);
+
             clampUProp = FindProperty("_ClampU", props, false);
             clampVProp = FindProperty("_ClampV", props, false);
             flipUProp = FindProperty("_FlipU", props, false);
@@ -89,25 +116,45 @@ namespace UnityNinja.Editor
 
             if (ambientColorProp != null) materialEditor.ShaderProperty(ambientColorProp, "Ambient Color");
 
-            if (useEnvMapProp != null)
-            {
-                materialEditor.ShaderProperty(useEnvMapProp, "Environment Mapping (Spherical Normal)");
-            }
-
             if (alphaTestProp != null)
             {
                 materialEditor.ShaderProperty(alphaTestProp, "Enable Alpha Cutout");
-                if (alphaTestProp.floatValue > 0.5f && cutoffProp != null)
+                if (alphaTestProp.floatValue > 0.5f)
                 {
                     EditorGUI.indentLevel++;
-                    materialEditor.ShaderProperty(cutoffProp, "Cutoff Threshold");
+                    if (cutoffProp != null) materialEditor.ShaderProperty(cutoffProp, "Cutoff Threshold");
+                    if (alphaToMaskProp != null) materialEditor.ShaderProperty(alphaToMaskProp, "Alpha to Coverage (MSAA)");
                     EditorGUI.indentLevel--;
                 }
             }
 
             EditorGUILayout.Space();
 
-            // 2. UV Clamping & Mirroring (TileMode)
+            // 2. Environment Reflection
+            EditorGUILayout.LabelField("Environment Reflection", EditorStyles.boldLabel);
+            if (useEnvMapProp != null)
+            {
+                materialEditor.ShaderProperty(useEnvMapProp, "Base Texture as EnvMap (Replace UVs)");
+            }
+            if (addEnvMapProp != null)
+            {
+                materialEditor.ShaderProperty(addEnvMapProp, "Add Second Layer EnvMap Reflection");
+                if (addEnvMapProp.floatValue > 0.5f && envMapProp != null)
+                {
+                    EditorGUI.indentLevel++;
+                    if (envColorProp != null)
+                        materialEditor.TexturePropertySingleLine(new GUIContent("Reflection Map"), envMapProp, envColorProp);
+                    else
+                        materialEditor.TexturePropertySingleLine(new GUIContent("Reflection Map"), envMapProp);
+
+                    if (envPowerProp != null) materialEditor.ShaderProperty(envPowerProp, "Reflection Multiplier");
+                    EditorGUI.indentLevel--;
+                }
+            }
+
+            EditorGUILayout.Space();
+
+            // 3. UV Wrap & Clamping (TileMode)
             if (clampUProp != null || clampVProp != null || flipUProp != null || flipVProp != null)
             {
                 EditorGUILayout.LabelField("UV Wrap & Clamping (TileMode)", EditorStyles.boldLabel);
@@ -120,7 +167,7 @@ namespace UnityNinja.Editor
                 EditorGUILayout.Space();
             }
 
-            // 3. Lighting & Specular
+            // 4. Lighting & Specular
             EditorGUILayout.LabelField("Lighting & Specular", EditorStyles.boldLabel);
             if (specColorProp != null) materialEditor.ShaderProperty(specColorProp, "Specular Color");
             if (shininessProp != null) materialEditor.ShaderProperty(shininessProp, "Shininess / Exponent");
@@ -128,7 +175,7 @@ namespace UnityNinja.Editor
 
             EditorGUILayout.Space();
 
-            // 4. Render & Blend Settings
+            // 5. Render & Blend Settings
             if (modeProp != null)
             {
                 EditorGUILayout.LabelField("Render & Blend Settings", EditorStyles.boldLabel);
@@ -161,12 +208,33 @@ namespace UnityNinja.Editor
                 EditorGUI.indentLevel--;
             }
 
+            // 6. Raw Flags Bitmask Display
             if (materialFlagsProp != null)
             {
                 EditorGUILayout.Space();
-                EditorGUILayout.LabelField("Ninja Flags", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField("Ninja Material Flags", EditorStyles.boldLabel);
                 EditorGUI.indentLevel++;
-                materialEditor.ShaderProperty(materialFlagsProp, "Raw Flags Bitmask");
+
+                uint rawFlags = (uint)materialFlagsProp.floatValue;
+                EditorGUILayout.LabelField("Raw Hex Value:", $"0x{rawFlags:X8}");
+
+                EditorGUI.BeginChangeCheck();
+                NJSMaterialFlags flagsEnum = (NJSMaterialFlags)(rawFlags & 0x03F78000u);
+                flagsEnum = (NJSMaterialFlags)EditorGUILayout.EnumFlagsField("Active Bitmask", flagsEnum);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    uint newFlags = (rawFlags & ~0x03F78000u) | (uint)flagsEnum;
+                    materialFlagsProp.floatValue = (float)newFlags;
+
+                    if (clampUProp != null) clampUProp.floatValue = ((newFlags & (uint)NJSMaterialFlags.ClampU) != 0) ? 1.0f : 0.0f;
+                    if (clampVProp != null) clampVProp.floatValue = ((newFlags & (uint)NJSMaterialFlags.ClampV) != 0) ? 1.0f : 0.0f;
+                    if (flipUProp != null) flipUProp.floatValue = ((newFlags & (uint)NJSMaterialFlags.FlipU) != 0) ? 1.0f : 0.0f;
+                    if (flipVProp != null) flipVProp.floatValue = ((newFlags & (uint)NJSMaterialFlags.FlipV) != 0) ? 1.0f : 0.0f;
+                    if (useEnvMapProp != null) useEnvMapProp.floatValue = ((newFlags & (uint)NJSMaterialFlags.EnvironmentMap) != 0) ? 1.0f : 0.0f;
+                    if (unlitProp != null) unlitProp.floatValue = ((newFlags & (uint)NJSMaterialFlags.IgnoreLighting) != 0) ? 1.0f : 0.0f;
+                    if (cullProp != null) cullProp.floatValue = ((newFlags & (uint)NJSMaterialFlags.DoubleSided) != 0) ? (float)UnityEngine.Rendering.CullMode.Off : (float)UnityEngine.Rendering.CullMode.Back;
+                }
+
                 EditorGUI.indentLevel--;
             }
 
@@ -200,6 +268,7 @@ namespace UnityNinja.Editor
                     material.SetInt("_BlendOp", (int)UnityEngine.Rendering.BlendOp.Add);
                     material.SetInt("_ZWrite", 1);
                     material.SetFloat("_AlphaTest", 0.0f);
+                    material.SetFloat("_AlphaToMask", 0.0f);
                     material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Geometry;
                     material.SetShaderPassEnabled("ShadowCaster", true);
                     material.SetShaderPassEnabled("DepthOnly", true);
@@ -228,6 +297,7 @@ namespace UnityNinja.Editor
                     material.SetInt("_BlendOp", (int)UnityEngine.Rendering.BlendOp.Add);
                     material.SetInt("_ZWrite", 0);
                     material.SetFloat("_AlphaTest", 0.0f);
+                    material.SetFloat("_AlphaToMask", 0.0f);
                     material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
                     material.SetShaderPassEnabled("ShadowCaster", false);
                     material.SetShaderPassEnabled("DepthOnly", false);
@@ -242,6 +312,7 @@ namespace UnityNinja.Editor
                     material.SetInt("_BlendOp", (int)UnityEngine.Rendering.BlendOp.Add);
                     material.SetInt("_ZWrite", 0);
                     material.SetFloat("_AlphaTest", 0.0f);
+                    material.SetFloat("_AlphaToMask", 0.0f);
                     material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
                     material.SetShaderPassEnabled("ShadowCaster", false);
                     material.SetShaderPassEnabled("DepthOnly", false);
@@ -256,6 +327,7 @@ namespace UnityNinja.Editor
                     material.SetInt("_BlendOp", (int)UnityEngine.Rendering.BlendOp.Add);
                     material.SetInt("_ZWrite", 0);
                     material.SetFloat("_AlphaTest", 0.0f);
+                    material.SetFloat("_AlphaToMask", 0.0f);
                     material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
                     material.SetShaderPassEnabled("ShadowCaster", false);
                     material.SetShaderPassEnabled("DepthOnly", false);
@@ -270,6 +342,7 @@ namespace UnityNinja.Editor
                     material.SetInt("_BlendOp", (int)UnityEngine.Rendering.BlendOp.Add);
                     material.SetInt("_ZWrite", 0);
                     material.SetFloat("_AlphaTest", 0.0f);
+                    material.SetFloat("_AlphaToMask", 0.0f);
                     material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
                     material.SetShaderPassEnabled("ShadowCaster", false);
                     material.SetShaderPassEnabled("DepthOnly", false);
@@ -284,6 +357,7 @@ namespace UnityNinja.Editor
                     material.SetInt("_BlendOp", (int)UnityEngine.Rendering.BlendOp.ReverseSubtract);
                     material.SetInt("_ZWrite", 0);
                     material.SetFloat("_AlphaTest", 0.0f);
+                    material.SetFloat("_AlphaToMask", 0.0f);
                     material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
                     material.SetShaderPassEnabled("ShadowCaster", false);
                     material.SetShaderPassEnabled("DepthOnly", false);

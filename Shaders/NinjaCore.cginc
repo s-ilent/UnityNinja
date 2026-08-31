@@ -7,10 +7,16 @@ sampler2D _MainTex;
 float4 _MainTex_ST;
 float _Cutoff;
 float _AlphaTest;
+float _AlphaToMask;
 float _Shininess;
 float _Unlit;
 
 float _UseEnvMap;
+float _AddEnvMap;
+sampler2D _EnvMap;
+fixed4 _EnvColor;
+float _EnvPower;
+
 float _ClampU;
 float _ClampV;
 float _FlipU;
@@ -64,18 +70,27 @@ float2 GetEnvironmentUV(float3 worldNormal, float3 worldPos)
     return float2(dot(worldViewRight, worldNormal), dot(worldViewUp, worldNormal)) * 0.5 + 0.5;
 }
 
+void ApplyAlphaMasking(inout fixed4 baseColor)
+{
+    if (_AlphaTest > 0.5)
+    {
+        baseColor.a = saturate((baseColor.a - _Cutoff) / max(fwidth(baseColor.a), 0.0001) + 0.5);
+        clip(baseColor.a - 0.0039);
+    }
+}
+
 fixed4 frag_ninja(v2f_ninja i) : SV_Target
 {
     float2 sampleUV = i.uv;
 
-    // 1. Environment Reflection Mapping (0x400000)
+    // 1. Primary Texture UV: Replaced by Spherical Normal if _UseEnvMap is active
     if (_UseEnvMap > 0.5)
     {
         sampleUV = GetEnvironmentUV(normalize(i.worldNormal), i.worldPos);
     }
     else
     {
-        // 2. Texture Wrapping / Clamping / Flipping (Mirror)
+        // UV Clamping & Mirror / Flipping
         if (_ClampU > 0.5) sampleUV.x = saturate(sampleUV.x);
         if (_ClampV > 0.5) sampleUV.y = saturate(sampleUV.y);
         if (_FlipU > 0.5 && (frac(sampleUV.x * 0.5) >= 0.5)) sampleUV.x = 1.0 - frac(sampleUV.x);
@@ -85,10 +100,7 @@ fixed4 frag_ninja(v2f_ninja i) : SV_Target
     fixed4 tex = tex2D(_MainTex, sampleUV);
     fixed4 baseColor = tex * _Color * i.color;
 
-    if (_AlphaTest > 0.5)
-    {
-        clip(baseColor.a - _Cutoff);
-    }
+    ApplyAlphaMasking(baseColor);
 
     if (_Unlit > 0.5)
     {
@@ -106,13 +118,20 @@ fixed4 frag_ninja(v2f_ninja i) : SV_Target
 
     UNITY_LIGHT_ATTENUATION(atten, i, i.worldPos);
 
-    fixed3 ambient = ShadeSH9(float4(N, 1.0));
+    fixed3 ambient = ShadeSH9(float4(N, 1.0)) * _AmbientColor.rgb;
     fixed3 diffuse = _LightColor0.rgb * NdotL * atten;
     fixed3 specular = (_Shininess > 0.0) ? _SpecColor.rgb * pow(NdotH, max(1.0, _Shininess * 64.0)) * atten : fixed3(0, 0, 0);
 
-    ambient = lerp(ambient, _LightColor0, _AmbientColor.rgb);
-
     fixed3 finalRGB = baseColor.rgb * (ambient + diffuse) + specular;
+
+    // 2. Additive Secondary Environment Reflection Layer (_AddEnvMap)
+    if (_AddEnvMap > 0.5)
+    {
+        float2 envUV = GetEnvironmentUV(N, i.worldPos);
+        fixed4 envCol = tex2D(_EnvMap, envUV) * _EnvColor * _EnvPower;
+        finalRGB += envCol.rgb * envCol.a;
+    }
+
     fixed4 outColor = fixed4(finalRGB, baseColor.a);
     UNITY_APPLY_FOG(i.fogCoord, outColor);
     return outColor;
@@ -136,10 +155,7 @@ fixed4 frag_ninja_add(v2f_ninja i) : SV_Target
     fixed4 tex = tex2D(_MainTex, sampleUV);
     fixed4 baseColor = tex * _Color * i.color;
 
-    if (_AlphaTest > 0.5)
-    {
-        clip(baseColor.a - _Cutoff);
-    }
+    ApplyAlphaMasking(baseColor);
 
     if (_Unlit > 0.5)
     {
