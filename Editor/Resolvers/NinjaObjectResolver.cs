@@ -158,12 +158,12 @@ namespace UnityNinja.Editor
                         out mats
                     );
                 }
-                
+
                 if (mesh != null)
                 {
                     ctx?.AddObjectToAsset($"Mesh_{node.Name}", mesh);
 
-                    if (weights != null && weights.Length > 0)
+                    if (isSkinnedHierarchy && weights != null && weights.Length > 0)
                     {
                         // Transform mesh vertices from Root Model Space into nodeGO local space so rest-pose skinning is exact
                         Matrix4x4 modelToNode = currentModelMatrix.inverse;

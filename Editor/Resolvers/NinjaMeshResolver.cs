@@ -237,12 +237,11 @@ namespace UnityNinja.Editor
             if (attach == null) return null;
 
             // 1. Upload vertices & bone weights into global pool
-            // Inside CreateMeshFromChunkAttach:
             if (attach.VertexChunks != null)
             {
                 foreach (var vc in attach.VertexChunks)
                 {
-                    bool isWeighted = vc.Type is ChunkType.Vertex_VertexNinjaFlags or ChunkType.Vertex_VertexNormalNinjaFlags;
+                    bool isWeightedChunk = vc.Type is ChunkType.Vertex_VertexNinjaFlags or ChunkType.Vertex_VertexNormalNinjaFlags;
 
                     for (int i = 0; i < vc.VertexCount; i++)
                     {
@@ -257,8 +256,9 @@ namespace UnityNinja.Editor
                             Color32 col = (i < vc.Diffuse.Count) ? vc.Diffuse[i] : new Color32(255, 255, 255, 255);
 
                             BoneWeight bw = default;
+                            bool hasWeight = false;
 
-                            if (isWeighted && vc.NinjaFlags != null && i < vc.NinjaFlags.Count)
+                            if (isSkinned && isWeightedChunk && vc.NinjaFlags != null && i < vc.NinjaFlags.Count)
                             {
                                 uint nFlag = vc.NinjaFlags[i];
                                 int localTarget = (int)(nFlag & 0xFFFF);
@@ -266,7 +266,7 @@ namespace UnityNinja.Editor
 
                                 uint rawW = (nFlag >> 16) & 0xFFFF;
                                 float weightVal = rawW > 255 ? (rawW / 65535.0f) : (rawW / 255.0f);
-                                if (weightVal <= 0.0f) weightVal = 1.0f; else weightVal = weightVal;
+                                if (weightVal <= 0.0f) weightVal = 1.0f;
 
                                 if (actualTarget >= 0 && actualTarget < globalVertexBuffer.Length)
                                 {
@@ -298,9 +298,12 @@ namespace UnityNinja.Editor
                                 continue;
                             }
 
-                            // For non-weighted chunks in a skinned skeleton: 100% bound to declaring bone
-                            bw.boneIndex0 = nodeIndex;
-                            bw.weight0 = 1.0f;
+                            if (isSkinned)
+                            {
+                                bw.boneIndex0 = nodeIndex;
+                                bw.weight0 = 1.0f;
+                                hasWeight = true;
+                            }
 
                             globalVertexBuffer[targetIdx] = new ChunkVertexEntry
                             {
@@ -309,7 +312,7 @@ namespace UnityNinja.Editor
                                 Color = col,
                                 BoneWeight = bw,
                                 HasValue = true,
-                                HasWeight = true
+                                HasWeight = isSkinned && hasWeight
                             };
                         }
                     }
@@ -366,7 +369,7 @@ namespace UnityNinja.Editor
                                 : Vector2.zero;
 
                             BoneWeight bw = default;
-                            if (hasVtx && globalVertexBuffer[gIdx].HasWeight)
+                            if (isSkinned && hasVtx && globalVertexBuffer[gIdx].HasWeight)
                             {
                                 bw = globalVertexBuffer[gIdx].BoneWeight;
                                 float totalW = bw.weight0 + bw.weight1 + bw.weight2 + bw.weight3;
@@ -379,15 +382,9 @@ namespace UnityNinja.Editor
                                 }
                                 else
                                 {
-                                    bw.boneIndex0 = nodeIndex;
+                                    bw.boneIndex0 = globalVertexBuffer[gIdx].BoneWeight.boneIndex0;
                                     bw.weight0 = 1.0f;
                                 }
-                                buffer.HasWeights = true;
-                            }
-                            else if (isSkinned)
-                            {
-                                bw.boneIndex0 = nodeIndex;
-                                bw.weight0 = 1.0f;
                                 buffer.HasWeights = true;
                             }
 
@@ -431,7 +428,7 @@ namespace UnityNinja.Editor
             }
 
             Mesh mesh = buffer.BuildMesh(name);
-            if (buffer.HasWeights)
+            if (isSkinned && buffer.HasWeights)
             {
                 outWeights = buffer.BoneWeights.ToArray();
             }
