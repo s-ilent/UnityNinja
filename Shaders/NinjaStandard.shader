@@ -2,17 +2,22 @@ Shader "Ninja/Standard"
 {
     Properties
     {
+        // Primary Surface & Colors
         _Color ("Main Color", Color) = (1,1,1,1)
         _AmbientColor ("Ambient Color", Color) = (1,1,1,1)
         _MainTex ("Base Texture (RGB) Alpha (A)", 2D) = "white" {}
         _Cutoff ("Alpha Cutoff", Range(0, 1)) = 0.5
         [ToggleUI] _AlphaTest ("Enable Alpha Cutout", Float) = 0.0
 
+        // Specular & Exponent
         _SpecColor ("Specular Color", Color) = (0, 0, 0, 1)
         _Shininess ("Shininess / Exponent", Range(0, 1)) = 0.0
 
-        [ToggleUI] _UseEnvMap ("Environment Reflection", Float) = 0.0
-        _EnvMap ("Reflection Map", 2D) = "black" {}
+        // Environment Mapping Flag (0x400000)
+        [ToggleUI] _UseEnvMap ("Environment Mapping (Spherical Normal)", Float) = 0.0
+
+        // Raw Metadata Flags
+        _MaterialFlags ("Ninja Material Flags", Float) = 0.0
 
         // Rendering Pipeline States
         _Mode ("Rendering Mode", Float) = 0.0
@@ -20,7 +25,9 @@ Shader "Ninja/Standard"
         [Enum(UnityEngine.Rendering.BlendMode)] _DstBlend ("Destination Blend", Float) = 0.0
         [Enum(UnityEngine.Rendering.BlendOp)] _BlendOp ("Blend Operation", Float) = 0.0
         [Enum(Off,0,On,1)] _ZWrite ("Depth Write", Float) = 1.0
+        [Enum(UnityEngine.Rendering.CompareFunction)] _ZTest ("Depth Test", Float) = 4.0
         [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull Mode", Float) = 0.0
+        [Queue] _CustomRenderQueue ("Custom Render Queue", Float) = -1.0
         [ToggleUI] _Unlit ("Unlit Mode", Float) = 0.0
     }
 
@@ -30,6 +37,7 @@ Shader "Ninja/Standard"
         LOD 200
         Cull [_Cull]
 
+        // Forward Base Pass
         Pass
         {
             Name "FORWARD"
@@ -38,8 +46,13 @@ Shader "Ninja/Standard"
             Blend [_SrcBlend] [_DstBlend]
             BlendOp [_BlendOp]
             ZWrite [_ZWrite]
+            ZTest [_ZTest]
 
             CGPROGRAM
+            #ifndef UNITY_PASS_FORWARDBASE
+            #define UNITY_PASS_FORWARDBASE
+            #endif
+
             #pragma vertex vert_ninja
             #pragma fragment frag_ninja
             #pragma target 3.0
@@ -50,6 +63,135 @@ Shader "Ninja/Standard"
             #include "Lighting.cginc"
             #include "AutoLight.cginc"
             #include "NinjaCore.cginc"
+            ENDCG
+        }
+
+        // Forward Add Pass (Point / Spot lights)
+        Pass
+        {
+            Name "FORWARD_DELTA"
+            Tags { "LightMode" = "ForwardAdd" }
+
+            Blend [_SrcBlend] One
+            BlendOp [_BlendOp]
+            ZWrite Off
+            ZTest LEqual
+
+            CGPROGRAM
+            #ifndef UNITY_PASS_FORWARDADD
+            #define UNITY_PASS_FORWARDADD
+            #endif
+
+            #pragma vertex vert_ninja
+            #pragma fragment frag_ninja_add
+            #pragma target 3.0
+            #pragma multi_compile_fwdadd_fullshadows
+            #pragma multi_compile_fog
+
+            #include "UnityCG.cginc"
+            #include "Lighting.cginc"
+            #include "AutoLight.cginc"
+            #include "NinjaCore.cginc"
+            ENDCG
+        }
+
+        // Shadow Caster Pass
+        Pass
+        {
+            Name "ShadowCaster"
+            Tags { "LightMode" = "ShadowCaster" }
+
+            ZWrite On ZTest LEqual
+
+            CGPROGRAM
+            #pragma vertex vertShadowCaster
+            #pragma fragment fragShadowCaster
+            #pragma target 3.0
+            #pragma multi_compile_shadowcaster
+
+            #include "UnityCG.cginc"
+
+            struct v2f_shadow
+            {
+                V2F_SHADOW_CASTER;
+                float2 uv : TEXCOORD1;
+            };
+
+            fixed4 _Color;
+            sampler2D _MainTex;
+            float4 _MainTex_ST;
+            float _AlphaTest;
+            float _Cutoff;
+            float _Mode;
+
+            v2f_shadow vertShadowCaster(appdata_base v)
+            {
+                v2f_shadow o;
+                TRANSFER_SHADOW_CASTER_NORMALOFFSET(o)
+                o.uv = TRANSFORM_TEX(v.texcoord, _MainTex);
+                return o;
+            }
+
+            float4 fragShadowCaster(v2f_shadow i) : SV_Target
+            {
+                fixed4 col = tex2D(_MainTex, i.uv) * _Color;
+                if (_Mode > 1.5) clip(-1);
+                if (_AlphaTest > 0.5)
+                {
+                    clip(col.a - _Cutoff);
+                }
+                SHADOW_CASTER_FRAGMENT(i)
+            }
+            ENDCG
+        }
+
+        // Depth Only Pass
+        Pass
+        {
+            Name "DepthOnly"
+            Tags { "LightMode" = "DepthOnly" }
+
+            ZWrite On
+            ColorMask 0
+
+            CGPROGRAM
+            #pragma vertex vertDepth
+            #pragma fragment fragDepth
+            #pragma target 3.0
+
+            #include "UnityCG.cginc"
+
+            struct v2f_depth
+            {
+                float4 pos : SV_POSITION;
+                float2 uv : TEXCOORD0;
+            };
+
+            fixed4 _Color;
+            sampler2D _MainTex;
+            float4 _MainTex_ST;
+            float _AlphaTest;
+            float _Cutoff;
+            float _Mode;
+
+            v2f_depth vertDepth(appdata_base v)
+            {
+                v2f_depth o;
+                o.pos = UnityObjectToClipPos(v.vertex);
+                o.uv = TRANSFORM_TEX(v.texcoord, _MainTex);
+                return o;
+            }
+
+            fixed4 fragDepth(v2f_depth i) : SV_Target
+            {
+                fixed4 col = tex2D(_MainTex, i.uv) * _Color;
+                if (_Mode > 1.5) clip(-1);
+                if (_AlphaTest > 0.5)
+                {
+                    clip(col.a - _Cutoff);
+                }
+                return 0;
+            }
             ENDCG
         }
     }

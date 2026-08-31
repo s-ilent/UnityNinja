@@ -209,6 +209,8 @@ namespace UnityNinja.Editor
                         colorSuffix += "_Double";
                     if (mat.IgnoreLighting)
                         colorSuffix += "_Unlit";
+                    if (mat.EnvironmentMap)
+                        colorSuffix += "_Env";
                 }
 
                 return namingMode switch
@@ -248,11 +250,12 @@ namespace UnityNinja.Editor
 
             if (ninjaMat == null) return mat;
 
-            // 1. Color Parameters
+            // 1. Color Parameters & Raw Flags
             mat.SetColor("_Color", (Color)ninjaMat.DiffuseColor);
             mat.SetColor("_AmbientColor", (Color)ninjaMat.SpecularColor);
             mat.SetColor("_SpecColor", (Color)ninjaMat.SpecularColor);
             mat.SetFloat("_Shininess", Mathf.Clamp01(ninjaMat.Exponent / 64.0f));
+            mat.SetFloat("_MaterialFlags", (float)ninjaMat.Flags);
 
             // 2. Texture Resolution
             Texture2D tex = ResolveTexture(ninjaMat.TextureID, texName, modelFolder, assetName, settings, ctx);
@@ -267,18 +270,21 @@ namespace UnityNinja.Editor
             mat.SetFloat("_UseEnvMap", ninjaMat.EnvironmentMap ? 1.0f : 0.0f);
             mat.SetInt("_Cull", ninjaMat.DoubleSided ? (int)UnityEngine.Rendering.CullMode.Off : (int)UnityEngine.Rendering.CullMode.Back);
 
-            // 4. Blending Mode Setup
+            // 4. Blending Mode Setup via Standard RenderMode
             if (ninjaMat.UseAlpha)
             {
                 UnityEngine.Rendering.BlendMode srcBlend = MapAlphaInstruction(ninjaMat.SourceAlpha, UnityEngine.Rendering.BlendMode.SrcAlpha);
                 UnityEngine.Rendering.BlendMode dstBlend = MapAlphaInstruction(ninjaMat.DestinationAlpha, UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
 
-                mat.SetFloat("_Mode", 2.0f); // Transparent
+                bool isAdditive = (dstBlend == UnityEngine.Rendering.BlendMode.One);
+                mat.SetFloat("_Mode", isAdditive ? 4.0f : 2.0f); // 4 = Additive, 2 = Transparent
                 mat.SetInt("_SrcBlend", (int)srcBlend);
                 mat.SetInt("_DstBlend", (int)dstBlend);
                 mat.SetInt("_ZWrite", 0);
                 mat.SetOverrideTag("RenderType", "Transparent");
                 mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+                mat.SetShaderPassEnabled("ShadowCaster", false);
+                mat.SetShaderPassEnabled("DepthOnly", false);
             }
             else
             {
@@ -288,6 +294,8 @@ namespace UnityNinja.Editor
                 mat.SetInt("_ZWrite", 1);
                 mat.SetOverrideTag("RenderType", "Opaque");
                 mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Geometry;
+                mat.SetShaderPassEnabled("ShadowCaster", true);
+                mat.SetShaderPassEnabled("DepthOnly", true);
             }
 
             return mat;
@@ -445,7 +453,7 @@ namespace UnityNinja.Editor
             AssetDatabase.Refresh();
             locationProp.enumValueIndex = (int)MaterialLocation.UseExternalMaterials;
             searchDirProp.stringValue = rel;
-            EditorUtility.DisplayDialog("Material Extraction Complete", $"Successfully extracted {count} materials to:\n{rel}", "OK");
+            EditorUtility.DisplayDialog("Material Extraction Complete", "Successfully extracted materials to " + rel, "OK");
         }
     }
 }
