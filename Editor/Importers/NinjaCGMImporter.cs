@@ -60,7 +60,9 @@ namespace UnityNinja.Editor
                     }
                 }
 
-                // 2. Build Sub-Models with embedded motions and direct texture binding
+                // 2. Build Sub-Models Dictionary
+                Dictionary<int, GameObject> resolvedModelPrototypes = new Dictionary<int, GameObject>();
+
                 for (int m = 0; m < archive.Models.Count; m++)
                 {
                     var modelEntry = archive.Models[m];
@@ -79,8 +81,6 @@ namespace UnityNinja.Editor
 
                     if (subModelGO != null)
                     {
-                        subModelGO.transform.SetParent(rootGO.transform, false);
-
                         if (settings.ImportAnimation && modelEntry.EmbeddedMotions != null && modelEntry.EmbeddedMotions.Count > 0)
                         {
                             NinjaAnimatorResolver.SetupModelAnimations(
@@ -94,10 +94,88 @@ namespace UnityNinja.Editor
                                 ctx
                             );
                         }
+
+                        resolvedModelPrototypes[m] = subModelGO;
                     }
                 }
 
-                // 3. Build Scene Dynamic Lights (NJLI)
+                // 3. Illbleed Stage Map Layout (CGMP)
+                if (archive.MapObjects.Count > 0)
+                {
+                    GameObject stageObjectsRoot = new GameObject("Stage_Objects");
+                    stageObjectsRoot.transform.SetParent(rootGO.transform, false);
+
+                    for (int i = 0; i < archive.MapObjects.Count; i++)
+                    {
+                        var mapObj = archive.MapObjects[i];
+                        string objName = $"[Obj_{mapObj.ObjectID:000}_Idx_{i:000}]";
+
+                        GameObject objGO = new GameObject(objName);
+                        objGO.transform.SetParent(stageObjectsRoot.transform, false);
+                        objGO.transform.localPosition = NinjaCoordinateUtility.ToUnityPosition(mapObj.Position, m_Scale);
+                        objGO.transform.localEulerAngles = NinjaCoordinateUtility.ToUnityEuler(mapObj.Rotation);
+                        objGO.transform.localScale = (mapObj.Scale == Vector3.zero) ? Vector3.one : mapObj.Scale;
+
+                        var comp = objGO.AddComponent<CGMPObjectComponent>();
+                        comp.objectID = mapObj.ObjectID;
+                        comp.flags = mapObj.Flags;
+                        comp.originalPosition = mapObj.Position;
+                        comp.originalRotation = mapObj.Rotation;
+                        comp.originalScale = mapObj.Scale;
+
+                        // Instantiate corresponding sub-model instance under this placed object
+                        if (resolvedModelPrototypes.TryGetValue(mapObj.ObjectID, out GameObject modelProto) && modelProto != null)
+                        {
+                            GameObject modelInstance = (GameObject)UnityEngine.Object.Instantiate(modelProto);
+                            modelInstance.name = modelProto.name;
+                            modelInstance.transform.SetParent(objGO.transform, false);
+                        }
+                    }
+
+                    // Also store the model prototypes container under root
+                    GameObject modelsLib = new GameObject("Model_Prototypes");
+                    modelsLib.transform.SetParent(rootGO.transform, false);
+                    foreach (var kvp in resolvedModelPrototypes)
+                    {
+                        kvp.Value.transform.SetParent(modelsLib.transform, false);
+                    }
+                }
+                else
+                {
+                    // If no CGMP layout table, attach all resolved models directly to root
+                    foreach (var kvp in resolvedModelPrototypes)
+                    {
+                        kvp.Value.transform.SetParent(rootGO.transform, false);
+                    }
+                }
+
+                // 4. Illbleed Stage Collisions (CGCL / CGLC)
+                if (archive.Collisions.Count > 0)
+                {
+                    GameObject colRoot = new GameObject("Stage_Collisions");
+                    colRoot.transform.SetParent(rootGO.transform, false);
+
+                    for (int i = 0; i < archive.Collisions.Count; i++)
+                    {
+                        var col = archive.Collisions[i];
+                        GameObject colGO = new GameObject($"[Col_{i:000}_Shape_{col.Shape}]");
+                        colGO.transform.SetParent(colRoot.transform, false);
+                        colGO.transform.localPosition = NinjaCoordinateUtility.ToUnityPosition(col.Center, m_Scale);
+
+                        if (col.Shape == 0) // Box
+                        {
+                            BoxCollider box = colGO.AddComponent<BoxCollider>();
+                            box.size = new Vector3(col.Size.x * m_Scale * 2f, col.Size.y * m_Scale * 2f, col.Size.z * m_Scale * 2f);
+                        }
+                        else // Sphere
+                        {
+                            SphereCollider sphere = colGO.AddComponent<SphereCollider>();
+                            sphere.radius = Mathf.Max(0.1f, col.Radius * m_Scale);
+                        }
+                    }
+                }
+
+                // 5. Scene Dynamic Lights (NJLI / CGAL)
                 if (archive.Lights.Count > 0)
                 {
                     GameObject lightsContainer = new GameObject("Dynamic_Lights");
@@ -118,6 +196,24 @@ namespace UnityNinja.Editor
                         lComp.type = (light.Direction != Vector3.zero) ? LightType.Directional : LightType.Point;
                         lComp.color = light.Color;
                         lComp.range = Mathf.Max(1.0f, light.Far * m_Scale);
+                    }
+                }
+
+                // 6. Cameras (NCAM / NJCA)
+                if (archive.Cameras.Count > 0)
+                {
+                    GameObject camsContainer = new GameObject("Scene_Cameras");
+                    camsContainer.transform.SetParent(rootGO.transform, false);
+
+                    foreach (var cam in archive.Cameras)
+                    {
+                        GameObject camGO = new GameObject($"Camera_{cam.Index:000}");
+                        camGO.transform.SetParent(camsContainer.transform, false);
+                        camGO.transform.localPosition = NinjaCoordinateUtility.ToUnityPosition(cam.Position, m_Scale);
+                        
+                        Camera cComp = camGO.AddComponent<Camera>();
+                        if (cam.NearClip > 0) cComp.nearClipPlane = cam.NearClip * m_Scale;
+                        if (cam.FarClip > 0) cComp.farClipPlane = cam.FarClip * m_Scale;
                     }
                 }
 
