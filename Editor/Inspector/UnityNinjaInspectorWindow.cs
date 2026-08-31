@@ -72,6 +72,8 @@ namespace UnityNinja.Editor
 
             m_Context.AssetPath = path;
             string ext = Path.GetExtension(path).ToLowerInvariant();
+            string assetName = Path.GetFileNameWithoutExtension(path);
+            string baseDir = Path.GetDirectoryName(path);
 
             try
             {
@@ -83,6 +85,12 @@ namespace UnityNinja.Editor
                     ModelFormat fmt = ext switch { ".sa2lvl" => ModelFormat.Chunk, ".sa2blvl" => ModelFormat.GC, _ => ModelFormat.Basic };
                     m_Context.LevelData = new LandTable(raw, headerAddr, 0, fmt);
                 }
+                else if (ext is ".njm" or ".gjm" or ".xjm" or ".nam")
+                {
+                    m_Context.NinjaFile = new NinjaBinaryFile(raw);
+                    if (m_Context.NinjaFile.Motions.Count > 0)
+                        m_Context.MainMotion = m_Context.NinjaFile.Motions[0];
+                }
                 else
                 {
                     ModelFormat fmt = ext switch { ".gj" => ModelFormat.GC, ".xj" => ModelFormat.XJ, _ => ModelFormat.Basic };
@@ -93,6 +101,26 @@ namespace UnityNinja.Editor
 
                     if (m_Context.NinjaFile.Motions.Count > 0)
                         m_Context.MainMotion = m_Context.NinjaFile.Motions[0];
+
+                    // If no embedded motion, search for companion animation files in same directory
+                    if (m_Context.MainMotion == null && !string.IsNullOrEmpty(baseDir) && Directory.Exists(baseDir))
+                    {
+                        string[] motionExts = { ".njm", ".gjm", ".xjm", ".nam" };
+                        foreach (string motExt in motionExts)
+                        {
+                            string candidate = Path.Combine(baseDir, assetName + motExt);
+                            if (File.Exists(candidate))
+                            {
+                                byte[] motBytes = File.ReadAllBytes(candidate);
+                                NinjaBinaryFile companionFile = new NinjaBinaryFile(motBytes);
+                                if (companionFile.Motions.Count > 0)
+                                {
+                                    m_Context.MainMotion = companionFile.Motions[0];
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
             }
             catch (Exception ex)

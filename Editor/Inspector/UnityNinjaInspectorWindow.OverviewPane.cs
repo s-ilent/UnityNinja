@@ -3,6 +3,8 @@ using UnityEditor;
 using System.IO;
 using System.Collections.Generic;
 using UnityNinja;
+using UnityNinja.GC;
+using UnityNinja.XJ;
 
 namespace UnityNinja.Editor
 {
@@ -86,13 +88,26 @@ namespace UnityNinja.Editor
                     }
                     break;
 
-                case 2: // Materials
+                case 2: // Materials across all attach formats
                     if (m_Context.RootModel != null)
                     {
                         var matList = new List<object>();
                         foreach (var n in m_Context.RootModel.EnumerateNodes())
                         {
-                            if (n.Attach is BasicAttach bs) matList.AddRange(bs.Materials);
+                            if (n.Attach is BasicAttach bs)
+                                matList.AddRange(bs.Materials);
+                            else if (n.Attach is ChunkAttach chunk)
+                                matList.AddRange(chunk.PolyChunks);
+                            else if (n.Attach is GCAttach gc)
+                            {
+                                foreach (var m in gc.OpaqueMeshes) matList.AddRange(m.Parameters);
+                                foreach (var m in gc.TranslucentMeshes) matList.AddRange(m.Parameters);
+                            }
+                            else if (n.Attach is XJAttach xj)
+                            {
+                                foreach (var m in xj.OpaqueMeshes) matList.Add(m.Material);
+                                foreach (var m in xj.TranslucentMeshes) matList.Add(m.Material);
+                            }
                         }
                         targetObj = matList;
                     }
