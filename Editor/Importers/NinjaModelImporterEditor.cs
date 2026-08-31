@@ -14,6 +14,7 @@ namespace UnityNinja.Editor
         private SerializedProperty m_ScaleProp;
         private SerializedProperty m_GenerateMeshCollidersProp;
         private SerializedProperty m_ImportMaterialsProp;
+        private SerializedProperty m_DeduplicateMaterialsProp;
         private SerializedProperty m_MaterialLocationProp;
         private SerializedProperty m_MaterialNamingProp;
         private SerializedProperty m_MaterialSearchPathProp;
@@ -31,6 +32,7 @@ namespace UnityNinja.Editor
             m_ScaleProp = serializedObject.FindProperty("m_Scale");
             m_GenerateMeshCollidersProp = serializedObject.FindProperty("m_GenerateMeshColliders");
             m_ImportMaterialsProp = serializedObject.FindProperty("m_ImportMaterials");
+            m_DeduplicateMaterialsProp = serializedObject.FindProperty("m_DeduplicateMaterials");
             m_MaterialLocationProp = serializedObject.FindProperty("m_MaterialLocation");
             m_MaterialNamingProp = serializedObject.FindProperty("m_MaterialNaming");
             m_MaterialSearchPathProp = serializedObject.FindProperty("m_MaterialSearchPath");
@@ -63,6 +65,7 @@ namespace UnityNinja.Editor
                     if (m_ImportMaterialsProp.boolValue)
                     {
                         EditorGUI.indentLevel++;
+                        EditorGUILayout.PropertyField(m_DeduplicateMaterialsProp, new GUIContent("Deduplicate Materials"));
                         EditorGUILayout.PropertyField(m_MaterialLocationProp, new GUIContent("Location"));
                         EditorGUILayout.PropertyField(m_MaterialNamingProp, new GUIContent("Naming Mode"));
 

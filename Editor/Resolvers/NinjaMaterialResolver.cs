@@ -30,11 +30,82 @@ namespace UnityNinja.Editor
         ByTextureName = 2
     }
 
+    public readonly struct NinjaMaterialKey : IEquatable<NinjaMaterialKey>
+    {
+        public readonly int TextureID;
+        public readonly string TextureName;
+        public readonly Color32 DiffuseColor;
+        public readonly Color32 SpecularColor;
+        public readonly float Exponent;
+        public readonly uint Flags;
+
+        public NinjaMaterialKey(NJS_MATERIAL mat, string texName)
+        {
+            if (mat != null)
+            {
+                TextureID = mat.TextureID;
+                TextureName = texName ?? "";
+                DiffuseColor = mat.DiffuseColor;
+                SpecularColor = mat.SpecularColor;
+                Exponent = mat.Exponent;
+                Flags = mat.Flags;
+            }
+            else
+            {
+                TextureID = -1;
+                TextureName = "";
+                DiffuseColor = new Color32(255, 255, 255, 255);
+                SpecularColor = new Color32(0, 0, 0, 0);
+                Exponent = 0.0f;
+                Flags = 0;
+            }
+        }
+
+        public bool Equals(NinjaMaterialKey other)
+        {
+            return TextureID == other.TextureID &&
+                   string.Equals(TextureName, other.TextureName, StringComparison.OrdinalIgnoreCase) &&
+                   DiffuseColor.r == other.DiffuseColor.r &&
+                   DiffuseColor.g == other.DiffuseColor.g &&
+                   DiffuseColor.b == other.DiffuseColor.b &&
+                   DiffuseColor.a == other.DiffuseColor.a &&
+                   SpecularColor.r == other.SpecularColor.r &&
+                   SpecularColor.g == other.SpecularColor.g &&
+                   SpecularColor.b == other.SpecularColor.b &&
+                   SpecularColor.a == other.SpecularColor.a &&
+                   Mathf.Approximately(Exponent, other.Exponent) &&
+                   Flags == other.Flags;
+        }
+
+        public override bool Equals(object obj) => obj is NinjaMaterialKey other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hash = TextureID;
+                hash = (hash * 397) ^ (TextureName != null ? StringComparer.OrdinalIgnoreCase.GetHashCode(TextureName) : 0);
+                hash = (hash * 397) ^ (DiffuseColor.r | (DiffuseColor.g << 8) | (DiffuseColor.b << 16) | (DiffuseColor.a << 24));
+                hash = (hash * 397) ^ (SpecularColor.r | (SpecularColor.g << 8) | (SpecularColor.b << 16) | (SpecularColor.a << 24));
+                hash = (hash * 397) ^ Exponent.GetHashCode();
+                hash = (hash * 397) ^ (int)Flags;
+                return hash;
+            }
+        }
+    }
+
     public static class NinjaMaterialResolver
     {
         private static readonly string[] TextureExtensions = {
             ".png", ".dds", ".tga", ".jpg", ".jpeg", ".bmp", ".psd", ".tif", ".tiff", ".pvr", ".dcpvr", ".spvr"
         };
+
+        private static readonly Dictionary<NinjaMaterialKey, Material> s_MaterialCache = new Dictionary<NinjaMaterialKey, Material>();
+
+        public static void ResetMaterialCache()
+        {
+            s_MaterialCache.Clear();
+        }
 
         public static Material ResolveMaterial(
             NJS_MATERIAL ninjaMat,
@@ -48,7 +119,7 @@ namespace UnityNinja.Editor
         {
             settings ??= NinjaImportSettings.Default;
 
-            // Apply Inspector Material Override Remap if specified
+            // 1. Check inspector override table
             if (settings.MaterialRemaps != null)
             {
                 foreach (var remap in settings.MaterialRemaps)
@@ -62,7 +133,16 @@ namespace UnityNinja.Editor
                 ? texNameList[ninjaMat.TextureID]
                 : "";
 
-            string matName = DetermineMaterialName(ninjaMat, materialIndex, nodeName, assetName, resolvedTexName, settings.MaterialNaming);
+            // 2. Check deduplication cache
+            NinjaMaterialKey key = new NinjaMaterialKey(ninjaMat, resolvedTexName);
+            if (settings.DeduplicateMaterials && s_MaterialCache.TryGetValue(key, out Material cachedMat) && cachedMat != null)
+            {
+                return cachedMat;
+            }
+
+            string matName = DetermineMaterialName(ninjaMat, materialIndex, nodeName, assetName, resolvedTexName, settings.MaterialNaming, settings.DeduplicateMaterials);
+
+            Material resolvedMaterial = null;
 
             if (settings.MaterialLocation == MaterialLocation.UseExternalMaterials)
             {
@@ -71,7 +151,11 @@ namespace UnityNinja.Editor
                 if (File.Exists(existingPath))
                 {
                     var existing = AssetDatabase.LoadAssetAtPath<Material>(existingPath);
-                    if (existing != null) return existing;
+                    if (existing != null)
+                    {
+                        if (settings.DeduplicateMaterials) s_MaterialCache[key] = existing;
+                        return existing;
+                    }
                 }
 
                 Material created = CreateMaterialInstance(ninjaMat, matName, modelFolder, assetName, resolvedTexName, settings, ctx);
@@ -82,14 +166,21 @@ namespace UnityNinja.Editor
                 }
 
                 AssetDatabase.CreateAsset(created, existingPath);
-                return created;
+                resolvedMaterial = created;
             }
             else
             {
                 Material embedded = CreateMaterialInstance(ninjaMat, matName, modelFolder, assetName, resolvedTexName, settings, ctx);
                 ctx?.AddObjectToAsset($"Material_{materialIndex}_{matName}", embedded);
-                return embedded;
+                resolvedMaterial = embedded;
             }
+
+            if (settings.DeduplicateMaterials && resolvedMaterial != null)
+            {
+                s_MaterialCache[key] = resolvedMaterial;
+            }
+
+            return resolvedMaterial;
         }
 
         private static string DetermineMaterialName(
@@ -98,8 +189,36 @@ namespace UnityNinja.Editor
             string nodeName,
             string assetName,
             string texName,
-            MaterialNaming namingMode)
+            MaterialNaming namingMode,
+            bool deduplicate)
         {
+            if (deduplicate)
+            {
+                string cleanTex = !string.IsNullOrEmpty(texName) ? StripExtensions(texName) : "";
+                string baseTexName = !string.IsNullOrEmpty(cleanTex)
+                    ? cleanTex
+                    : (mat != null && mat.TextureID >= 0 ? $"Tex_{mat.TextureID:00}" : "Color");
+
+                string colorSuffix = "";
+                if (mat != null)
+                {
+                    if (mat.DiffuseColor.r != 255 || mat.DiffuseColor.g != 255 || mat.DiffuseColor.b != 255)
+                        colorSuffix += $"_D_{mat.DiffuseColor.r}_{mat.DiffuseColor.g}_{mat.DiffuseColor.b}";
+                    if (mat.UseAlpha)
+                        colorSuffix += "_Alpha";
+                    if (mat.DoubleSided)
+                        colorSuffix += "_Double";
+                    if (mat.IgnoreLighting)
+                        colorSuffix += "_Unlit";
+                }
+
+                return namingMode switch
+                {
+                    MaterialNaming.ByModelAndMaterialName => $"{assetName}_Mat_{baseTexName}{colorSuffix}",
+                    _ => $"Mat_{baseTexName}{colorSuffix}"
+                };
+            }
+
             if (namingMode == MaterialNaming.ByTextureName && !string.IsNullOrEmpty(texName))
             {
                 return StripExtensions(texName);
@@ -255,7 +374,6 @@ namespace UnityNinja.Editor
 
         private static Texture2D LoadOrDecodeTexture(string path, string assetName, UnityEditor.AssetImporters.AssetImportContext ctx)
         {
-            // 1. Check if Unity AssetDatabase already has this texture imported (PNG, DDS, TGA, or overridden PVR)
             var t = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
             if (t != null)
             {
@@ -263,7 +381,6 @@ namespace UnityNinja.Editor
                 return t;
             }
         
-            // 2. Only decode directly if AssetDatabase did not provide a Texture2D
             string ext = Path.GetExtension(path).ToLowerInvariant();
             if (ext is ".pvr" or ".dcpvr" or ".spvr")
             {

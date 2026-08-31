@@ -19,6 +19,7 @@ namespace UnityNinja.Editor
 
         [Header("Materials")]
         public bool m_ImportMaterials = true;
+        public bool m_DeduplicateMaterials = true;
         public MaterialLocation m_MaterialLocation = MaterialLocation.EmbedInPrefab;
         public MaterialNaming m_MaterialNaming = MaterialNaming.ByMaterialName;
         public MaterialSearch m_MaterialSearch = MaterialSearch.RecursiveSubFolder;
@@ -35,6 +36,7 @@ namespace UnityNinja.Editor
             Scale = m_Scale,
             GenerateMeshColliders = m_GenerateMeshColliders,
             ImportMaterials = m_ImportMaterials,
+            DeduplicateMaterials = m_DeduplicateMaterials,
             MaterialLocation = m_MaterialLocation,
             MaterialNaming = m_MaterialNaming,
             MaterialSearch = m_MaterialSearch,

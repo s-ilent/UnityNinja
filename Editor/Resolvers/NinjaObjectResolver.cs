@@ -27,6 +27,9 @@ namespace UnityNinja.Editor
             ChunkVertexEntry[] globalChunkVertexBuffer = new ChunkVertexEntry[32768];
             bool isSkinnedHierarchy = HasSkinning(rootObject);
 
+            // Reset material deduplication cache before resolving tree
+            NinjaMaterialResolver.ResetMaterialCache();
+
             BuildNode(rootObject, rootGO.transform, rootName, modelFolder, settings, texNameList, ctx, nodeTransforms, globalChunkVertexBuffer);
 
             if (isSkinnedHierarchy)

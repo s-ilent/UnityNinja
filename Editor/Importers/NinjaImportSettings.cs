@@ -29,6 +29,7 @@ namespace UnityNinja.Editor
 
         // Materials
         public bool ImportMaterials = true;
+        public bool DeduplicateMaterials = true;
         public MaterialLocation MaterialLocation = MaterialLocation.EmbedInPrefab;
         public MaterialNaming MaterialNaming = MaterialNaming.ByMaterialName;
         public MaterialSearch MaterialSearch = MaterialSearch.RecursiveSubFolder;
