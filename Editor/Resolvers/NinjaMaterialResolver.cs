@@ -194,9 +194,8 @@ namespace UnityNinja.Editor
         {
             if (deduplicate)
             {
-                string cleanTex = !string.IsNullOrEmpty(texName) ? StripExtensions(texName) : "";
-                string baseTexName = !string.IsNullOrEmpty(cleanTex)
-                    ? cleanTex
+                string baseTexName = !string.IsNullOrEmpty(texName)
+                    ? texName
                     : (mat != null && mat.TextureID >= 0 ? $"Tex_{mat.TextureID:00}" : "Color");
 
                 string colorSuffix = "";
@@ -221,7 +220,7 @@ namespace UnityNinja.Editor
 
             if (namingMode == MaterialNaming.ByTextureName && !string.IsNullOrEmpty(texName))
             {
-                return StripExtensions(texName);
+                return texName;
             }
 
             string baseName = (mat != null && mat.TextureID >= 0)
@@ -329,8 +328,6 @@ namespace UnityNinja.Editor
 
             if (!string.IsNullOrEmpty(texName))
             {
-                string clean = StripExtensions(texName);
-                fileNamesToSearch.Add(clean);
                 fileNamesToSearch.Add(texName);
             }
 
@@ -348,7 +345,6 @@ namespace UnityNinja.Editor
             {
                 foreach (string fn in fileNamesToSearch)
                 {
-                    // 1. Direct check with extensions
                     foreach (string ext in TextureExtensions)
                     {
                         string p = $"{folder}/{fn}{ext}".Replace('\\', '/');
@@ -359,7 +355,6 @@ namespace UnityNinja.Editor
                         }
                     }
 
-                    // 2. Exact filename check
                     string exactPath = $"{folder}/{fn}".Replace('\\', '/');
                     if (File.Exists(exactPath))
                     {
@@ -426,23 +421,6 @@ namespace UnityNinja.Editor
             Add(searchDir);
 
             return folders;
-        }
-
-        public static string StripExtensions(string fileName)
-        {
-            if (string.IsNullOrEmpty(fileName)) return "";
-            string name = Path.GetFileName(fileName);
-            while (true)
-            {
-                string ext = Path.GetExtension(name);
-                if (string.IsNullOrEmpty(ext)) break;
-                string extLower = ext.ToLowerInvariant();
-                if (extLower is ".png" or ".dds" or ".tga" or ".jpg" or ".jpeg" or ".bmp" or ".pvr" or ".gvr" or ".xvr" or ".dcpvr" or ".spvr")
-                    name = Path.GetFileNameWithoutExtension(name);
-                else
-                    break;
-            }
-            return name;
         }
 
         private static string ResolveTargetFolder(string modelFolder, string searchDir) =>
