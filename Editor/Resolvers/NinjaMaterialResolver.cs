@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
 using UnityNinja;
+using UnityNinja.IO;
 using UnityNinja.GC;
 using UnityNinja.XJ;
 
@@ -32,7 +33,7 @@ namespace UnityNinja.Editor
     public static class NinjaMaterialResolver
     {
         private static readonly string[] TextureExtensions = {
-            ".png", ".dds", ".tga", ".jpg", ".jpeg", ".bmp", ".psd", ".tif", ".tiff"
+            ".png", ".dds", ".tga", ".jpg", ".jpeg", ".bmp", ".psd", ".tif", ".tiff", ".pvr", ".dcpvr", ".spvr"
         };
 
         public static Material ResolveMaterial(
@@ -216,7 +217,10 @@ namespace UnityNinja.Editor
 
             fileNamesToSearch.Add($"{assetName}_{textureID}");
             fileNamesToSearch.Add($"{assetName}_{textureID:00}");
+            fileNamesToSearch.Add($"texture_{textureID:03d}");
+            fileNamesToSearch.Add($"texture_{textureID:02d}");
             fileNamesToSearch.Add($"texture_{textureID}");
+            fileNamesToSearch.Add($"tex_{textureID:02d}");
             fileNamesToSearch.Add($"tex_{textureID}");
             fileNamesToSearch.Add($"{textureID:000}");
             fileNamesToSearch.Add($"{textureID}");
@@ -225,20 +229,58 @@ namespace UnityNinja.Editor
             {
                 foreach (string fn in fileNamesToSearch)
                 {
+                    // 1. Direct check with extensions
                     foreach (string ext in TextureExtensions)
                     {
-                        string p = $"{folder}/{fn}{ext}";
+                        string p = $"{folder}/{fn}{ext}".Replace('\\', '/');
                         if (File.Exists(p))
                         {
-                            var t = AssetDatabase.LoadAssetAtPath<Texture2D>(p);
-                            if (t != null)
-                            {
-                                ctx?.DependsOnSourceAsset(p);
-                                return t;
-                            }
+                            Texture2D loaded = LoadOrDecodeTexture(p, fn, ctx);
+                            if (loaded != null) return loaded;
                         }
                     }
+
+                    // 2. Exact filename check
+                    string exactPath = $"{folder}/{fn}".Replace('\\', '/');
+                    if (File.Exists(exactPath))
+                    {
+                        Texture2D loaded = LoadOrDecodeTexture(exactPath, Path.GetFileNameWithoutExtension(fn), ctx);
+                        if (loaded != null) return loaded;
+                    }
                 }
+            }
+
+            return null;
+        }
+
+        private static Texture2D LoadOrDecodeTexture(string path, string assetName, UnityEditor.AssetImporters.AssetImportContext ctx)
+        {
+            string ext = Path.GetExtension(path).ToLowerInvariant();
+
+            if (ext is ".pvr" or ".dcpvr" or ".spvr")
+            {
+                try
+                {
+                    byte[] bytes = File.ReadAllBytes(path);
+                    Texture2D pvrTex = PVRTextureDecoder.DecodePVR(bytes, assetName);
+                    if (pvrTex != null)
+                    {
+                        ctx?.DependsOnSourceAsset(path);
+                        ctx?.AddObjectToAsset($"PVR_{assetName}", pvrTex);
+                        return pvrTex;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[NinjaMaterialResolver] Direct PVR decode failed for {path}: {ex.Message}");
+                }
+            }
+
+            var t = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            if (t != null)
+            {
+                ctx?.DependsOnSourceAsset(path);
+                return t;
             }
 
             return null;
@@ -278,7 +320,7 @@ namespace UnityNinja.Editor
                 string ext = Path.GetExtension(name);
                 if (string.IsNullOrEmpty(ext)) break;
                 string extLower = ext.ToLowerInvariant();
-                if (extLower is ".png" or ".dds" or ".tga" or ".jpg" or ".jpeg" or ".bmp" or ".pvr" or ".gvr" or ".xvr")
+                if (extLower is ".png" or ".dds" or ".tga" or ".jpg" or ".jpeg" or ".bmp" or ".pvr" or ".gvr" or ".xvr" or ".dcpvr" or ".spvr")
                     name = Path.GetFileNameWithoutExtension(name);
                 else
                     break;
