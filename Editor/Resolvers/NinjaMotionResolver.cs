@@ -41,9 +41,6 @@ namespace UnityNinja.Editor
 
     public static class NinjaMotionResolver
     {
-        // ----------------------------------------------------------------------
-        // Data-Driven Binding Definitions Table (DRY design)
-        // ----------------------------------------------------------------------
         public static readonly TrackBindingDef[] AllTrackBindings = new[]
         {
             // Position (X: Inverted, Y: Normal, Z: Normal)
@@ -62,6 +59,15 @@ namespace UnityNinja.Editor
             new TrackBindingDef { Mask = AnimFlags.Scale, ComponentType = typeof(Transform), PropertyName = "localScale.z", GroupKey = "localScale", ChannelIndex = 2, DefaultRestValue = 1f, InvertSign = false }
         };
 
+        #region Math & Unrolling Utilities
+        public static long Gcd(long a, long b) => b == 0 ? a : Gcd(b, a % b);
+
+        public static long Lcm(long a, long b)
+        {
+            if (a <= 0 || b <= 0) return Math.Max(a, b);
+            return (a / Gcd(a, b)) * b;
+        }
+
         public static float Bams16ToUnrolledDegrees(short rawValue, ref long accumBams, ref bool isFirst)
         {
             if (isFirst)
@@ -77,6 +83,41 @@ namespace UnityNinja.Editor
             }
             return (float)(accumBams * (180.0 / 32768.0));
         }
+
+        public static List<float> GenerateTiledFrameTimes(
+            float rawFrame,
+            float subStart,
+            float subEnd,
+            float masterEndFrames,
+            bool isRepeatingTrack)
+        {
+            List<float> tiledFrames = new List<float>();
+            float cycleLen = subEnd - subStart;
+            bool shouldTile = isRepeatingTrack && cycleLen > 0.1f && (subEnd + 0.1f) < masterEndFrames;
+
+            if (!shouldTile)
+            {
+                tiledFrames.Add(rawFrame);
+                return tiledFrames;
+            }
+
+            int minCycle = -1;
+            int maxCycle = (int)Math.Ceiling(masterEndFrames / cycleLen) + 1;
+
+            for (int c = minCycle; c <= maxCycle; c++)
+            {
+                float cycleOffset = c * cycleLen;
+                float tiledFrame = subStart + cycleOffset + (rawFrame - subStart);
+
+                if (tiledFrame >= 0f && tiledFrame <= masterEndFrames)
+                {
+                    tiledFrames.Add(tiledFrame);
+                }
+            }
+
+            return tiledFrames;
+        }
+        #endregion
 
         public static AnimationClip ResolveMotion(
             NJS_MOTION motion,
@@ -155,6 +196,43 @@ namespace UnityNinja.Editor
                         AddKey(propertyKeyframes, kX, new Keyframe(t, kf.Value.x));
                         AddKey(propertyKeyframes, kY, new Keyframe(t, kf.Value.y));
                         AddKey(propertyKeyframes, kZ, new Keyframe(t, kf.Value.z));
+                    }
+                }
+
+                // 4. Quaternion Channels (WXYZ -> Continuous Unity Euler with DeltaAngle unwrapping)
+                if (data.Quaternion.Count > 0)
+                {
+                    PropertyKey kX = new PropertyKey(targetPath, typeof(Transform), "localEulerAnglesRaw.x");
+                    PropertyKey kY = new PropertyKey(targetPath, typeof(Transform), "localEulerAnglesRaw.y");
+                    PropertyKey kZ = new PropertyKey(targetPath, typeof(Transform), "localEulerAnglesRaw.z");
+
+                    Vector3 prevEuler = Vector3.zero;
+                    bool isFirst = true;
+
+                    foreach (var kf in data.Quaternion)
+                    {
+                        float t = kf.Key / framerate;
+                        Quaternion qRaw = kf.Value;
+                        // Map Ninja right-handed quaternion (WXYZ) to Unity left-handed (X inverted)
+                        Quaternion qUnity = new Quaternion(qRaw.x, -qRaw.y, -qRaw.z, qRaw.w);
+                        Vector3 curEuler = qUnity.eulerAngles;
+
+                        if (isFirst)
+                        {
+                            prevEuler = curEuler;
+                            isFirst = false;
+                        }
+                        else
+                        {
+                            curEuler.x = prevEuler.x + Mathf.DeltaAngle(prevEuler.x, curEuler.x);
+                            curEuler.y = prevEuler.y + Mathf.DeltaAngle(prevEuler.y, curEuler.y);
+                            curEuler.z = prevEuler.z + Mathf.DeltaAngle(prevEuler.z, curEuler.z);
+                            prevEuler = curEuler;
+                        }
+
+                        AddKey(propertyKeyframes, kX, new Keyframe(t, curEuler.x));
+                        AddKey(propertyKeyframes, kY, new Keyframe(t, curEuler.y));
+                        AddKey(propertyKeyframes, kZ, new Keyframe(t, curEuler.z));
                     }
                 }
 
