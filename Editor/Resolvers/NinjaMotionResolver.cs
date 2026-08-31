@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using UnityEngine;
 using UnityEditor;
 using UnityNinja;
@@ -158,6 +157,23 @@ namespace UnityNinja.Editor
                         AddKey(propertyKeyframes, kZ, new Keyframe(t, kf.Value.z));
                     }
                 }
+
+                // 4. Shape Motion (BlendShape Weight Animation)
+                if (data.Vertex.Count > 0)
+                {
+                    foreach (var kf in data.Vertex)
+                    {
+                        int frame = kf.Key;
+                        float t = frame / framerate;
+                        string shapeProp = $"blendShape.Shape_Frame_{frame}";
+                        PropertyKey kShape = new PropertyKey(targetPath, typeof(SkinnedMeshRenderer), shapeProp);
+
+                        // Pulse blend shape at its frame timestamp
+                        AddKey(propertyKeyframes, kShape, new Keyframe(Mathf.Max(0f, t - (1f / framerate)), 0f));
+                        AddKey(propertyKeyframes, kShape, new Keyframe(t, 100f));
+                        AddKey(propertyKeyframes, kShape, new Keyframe(Mathf.Min(maxTime, t + (1f / framerate)), 0f));
+                    }
+                }
             }
 
             // Fill companion channels to prevent frozen axes in Unity
@@ -201,6 +217,8 @@ namespace UnityNinja.Editor
 
             foreach (var key in keys)
             {
+                if (key.ComponentType != typeof(Transform)) continue;
+
                 string group = key.PropertyName.Split('.')[0];
                 string groupKey = $"{key.TargetPath}|{key.ComponentType.Name}|{group}";
                 if (!processedGroups.Add(groupKey)) continue;

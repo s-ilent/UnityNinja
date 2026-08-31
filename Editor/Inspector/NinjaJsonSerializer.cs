@@ -22,7 +22,7 @@ namespace UnityNinja.Editor
         private static void SerializeInternal(object obj, TextWriter writer, int indentLevel, HashSet<object> visited)
         {
             if (obj == null) { writer.Write("null"); return; }
-            if (indentLevel > 8) { writer.Write("\"...\""); return; }
+            if (indentLevel > 10) { writer.Write("\"...\""); return; }
 
             Type type = obj.GetType();
 
@@ -44,15 +44,58 @@ namespace UnityNinja.Editor
                 return;
             }
 
+            if (obj is Vector2 v2)
+            {
+                writer.Write($"{{\"u\": {v2.x:F4}, \"v\": {v2.y:F4}}}");
+                return;
+            }
+
             if (obj is Vector3 v3)
             {
                 writer.Write($"{{\"x\": {v3.x:F4}, \"y\": {v3.y:F4}, \"z\": {v3.z:F4}}}");
                 return;
             }
 
-            if (obj is Color32 c32)
+            if (obj is Vector4 v4)
             {
+                writer.Write($"{{\"x\": {v4.x:F4}, \"y\": {v4.y:F4}, \"z\": {v4.z:F4}, \"w\": {v4.w:F4}}}");
+                return;
+            }
+
+            if (obj is Quaternion q)
+            {
+                writer.Write($"{{\"x\": {q.x:F4}, \"y\": {q.y:F4}, \"z\": {q.z:F4}, \"w\": {q.w:F4}}}");
+                return;
+            }
+
+            if (obj is Color c)
+            {
+                Color32 c32 = c;
                 writer.Write($"{{\"r\": {c32.r}, \"g\": {c32.g}, \"b\": {c32.b}, \"a\": {c32.a}}}");
+                return;
+            }
+
+            if (obj is Color32 c32Val)
+            {
+                writer.Write($"{{\"r\": {c32Val.r}, \"g\": {c32Val.g}, \"b\": {c32Val.b}, \"a\": {c32Val.a}}}");
+                return;
+            }
+
+            if (obj is NinjaVertex nv)
+            {
+                writer.Write($"{{\"x\": {nv.x:F4}, \"y\": {nv.y:F4}, \"z\": {nv.z:F4}}}");
+                return;
+            }
+
+            if (obj is NinjaUV nuv)
+            {
+                writer.Write($"{{\"u\": {nuv.u:F4}, \"v\": {nuv.v:F4}}}");
+                return;
+            }
+
+            if (obj is NinjaRotation nrot)
+            {
+                writer.Write($"{{\"x\": {nrot.x}, \"y\": {nrot.y}, \"z\": {nrot.z}, \"deg\": {{\"x\": {NinjaRotation.BamToDegrees(nrot.x):F2}, \"y\": {NinjaRotation.BamToDegrees(nrot.y):F2}, \"z\": {NinjaRotation.BamToDegrees(nrot.z):F2}}}}}");
                 return;
             }
 
@@ -95,7 +138,7 @@ namespace UnityNinja.Editor
                 int count = 0;
                 foreach (var item in list)
                 {
-                    if (count++ > 200) { writer.WriteLine($"{indent}\"... [truncated {count} items]\""); break; }
+                    if (count++ > 500) { writer.WriteLine($"{indent}\"... [truncated {count} items]\""); break; }
                     if (!first) writer.WriteLine(",");
                     first = false;
                     writer.Write(indent);
@@ -109,19 +152,33 @@ namespace UnityNinja.Editor
             writer.WriteLine("{");
             string propIndent = new string(' ', (indentLevel + 1) * 2);
             string closeIndent = new string(' ', indentLevel * 2);
-            bool firstProp = true;
+            bool firstMember = true;
 
+            // 1. Serialize Public Instance Fields
+            foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (field.Name.StartsWith("m_") || field.Name is "Parent" or "Sibling" or "Children") continue;
+
+                object val = null;
+                try { val = field.GetValue(obj); } catch { continue; }
+
+                if (!firstMember) writer.WriteLine(",");
+                firstMember = false;
+                writer.Write($"{propIndent}\"{field.Name}\": ");
+                SerializeInternal(val, writer, indentLevel + 1, visited);
+            }
+
+            // 2. Serialize Public Instance Properties
             foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (!prop.CanRead || prop.GetIndexParameters().Length > 0) continue;
-                // Exclude parent/sibling/cycle properties
                 if (prop.Name is "Parent" or "Sibling" or "CodePath" or "HasWeight" or "Children") continue;
 
                 object val = null;
                 try { val = prop.GetValue(obj, null); } catch { continue; }
 
-                if (!firstProp) writer.WriteLine(",");
-                firstProp = false;
+                if (!firstMember) writer.WriteLine(",");
+                firstMember = false;
                 writer.Write($"{propIndent}\"{prop.Name}\": ");
                 SerializeInternal(val, writer, indentLevel + 1, visited);
             }

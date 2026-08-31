@@ -47,7 +47,14 @@ namespace UnityNinja
 
         public NJS_MOTION() { }
 
-        public NJS_MOTION(byte[] file, int address, uint imageBase, int numModels, Dictionary<int, string> labels = null, bool shortRot = false)
+        public NJS_MOTION(
+            byte[] file,
+            int address,
+            uint imageBase,
+            int numModels,
+            Dictionary<int, string> labels = null,
+            bool shortRot = false,
+            int[] numVerts = null)
         {
             if (address + 12 > file.Length) return;
 
@@ -172,6 +179,102 @@ namespace UnityNinja
                     }
                 }
 
+                // 5. Vertex Tracks (Morph Targets)
+                if (Flags.HasFlag(AnimFlags.Vertex))
+                {
+                    int kfCount = ByteConverter.ToInt32(file, mdataAddr); mdataAddr += 4;
+                    if (vertOff > 0 && kfCount > 0 && vertOff + kfCount * 8 <= file.Length)
+                    {
+                        int vAddr = (int)vertOff;
+                        List<int> ptrs = new List<int>();
+                        for (int k = 0; k < kfCount; k++)
+                        {
+                            ptrs.Add((int)(ByteConverter.ToUInt32(file, vAddr + 4) - imageBase));
+                            vAddr += 8;
+                        }
+
+                        int vtxCount = (numVerts != null && i < numVerts.Length) ? numVerts[i] : -1;
+                        if (vtxCount < 0 && ptrs.Count > 1)
+                        {
+                            vtxCount = Math.Max(1, (ptrs[1] - ptrs[0]) / 12);
+                        }
+                        else if (vtxCount < 0 && ptrs.Count > 0)
+                        {
+                            vtxCount = Math.Max(1, (int)(vertOff - ptrs[0]) / 12);
+                        }
+
+                        vAddr = (int)vertOff;
+                        for (int k = 0; k < kfCount; k++)
+                        {
+                            int f = ByteConverter.ToInt32(file, vAddr);
+                            int dataPtr = (int)(ByteConverter.ToUInt32(file, vAddr + 4) - imageBase);
+                            vAddr += 8;
+
+                            if (dataPtr >= 0 && dataPtr + (vtxCount * 12) <= file.Length)
+                            {
+                                Vector3[] verts = new Vector3[vtxCount];
+                                for (int v = 0; v < vtxCount; v++)
+                                {
+                                    verts[v] = new Vector3(
+                                        ByteConverter.ToSingle(file, dataPtr + v * 12),
+                                        ByteConverter.ToSingle(file, dataPtr + v * 12 + 4),
+                                        ByteConverter.ToSingle(file, dataPtr + v * 12 + 8)
+                                    );
+                                }
+                                data.Vertex[f] = verts;
+                            }
+                        }
+                    }
+                }
+
+                // 6. Normal Tracks
+                if (Flags.HasFlag(AnimFlags.Normal))
+                {
+                    int kfCount = ByteConverter.ToInt32(file, mdataAddr); mdataAddr += 4;
+                    if (normOff > 0 && kfCount > 0 && normOff + kfCount * 8 <= file.Length)
+                    {
+                        int nAddr = (int)normOff;
+                        List<int> ptrs = new List<int>();
+                        for (int k = 0; k < kfCount; k++)
+                        {
+                            ptrs.Add((int)(ByteConverter.ToUInt32(file, nAddr + 4) - imageBase));
+                            nAddr += 8;
+                        }
+
+                        int nrmCount = (numVerts != null && i < numVerts.Length) ? numVerts[i] : -1;
+                        if (nrmCount < 0 && ptrs.Count > 1)
+                        {
+                            nrmCount = Math.Max(1, (ptrs[1] - ptrs[0]) / 12);
+                        }
+                        else if (nrmCount < 0 && ptrs.Count > 0)
+                        {
+                            nrmCount = Math.Max(1, (int)(normOff - ptrs[0]) / 12);
+                        }
+
+                        nAddr = (int)normOff;
+                        for (int k = 0; k < kfCount; k++)
+                        {
+                            int f = ByteConverter.ToInt32(file, nAddr);
+                            int dataPtr = (int)(ByteConverter.ToUInt32(file, nAddr + 4) - imageBase);
+                            nAddr += 8;
+
+                            if (dataPtr >= 0 && dataPtr + (nrmCount * 12) <= file.Length)
+                            {
+                                Vector3[] norms = new Vector3[nrmCount];
+                                for (int n = 0; n < nrmCount; n++)
+                                {
+                                    norms[n] = new Vector3(
+                                        ByteConverter.ToSingle(file, dataPtr + n * 12),
+                                        ByteConverter.ToSingle(file, dataPtr + n * 12 + 4),
+                                        ByteConverter.ToSingle(file, dataPtr + n * 12 + 8)
+                                    );
+                                }
+                                data.Normal[f] = norms;
+                            }
+                        }
+                    }
+                }
+
                 if (data.HasData)
                 {
                     Models[i] = data;
@@ -196,8 +299,10 @@ namespace UnityNinja
             if (flags.HasFlag(AnimFlags.Rotation)) channelCount++;
             if (flags.HasFlag(AnimFlags.Scale)) channelCount++;
             if (flags.HasFlag(AnimFlags.Vector)) channelCount++;
+            if (flags.HasFlag(AnimFlags.Vertex)) channelCount++;
+            if (flags.HasFlag(AnimFlags.Normal)) channelCount++;
 
-            int stride = channelCount * 8; // pointer + count per active channel
+            int stride = channelCount * 8;
             if (stride == 0) return 1;
 
             int count = 0;

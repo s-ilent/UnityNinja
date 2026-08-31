@@ -1,3 +1,4 @@
+using System.IO;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor.AssetImporters;
@@ -12,8 +13,8 @@ namespace UnityNinja.Editor
         public static GameObject ResolveHierarchy(
             NJS_OBJECT rootObject,
             string rootName,
-            float scale,
-            bool generateColliders,
+            NinjaImportSettings settings,
+            string[] texNameList,
             AssetImportContext ctx,
             out List<Transform> nodeTransforms)
         {
@@ -21,13 +22,12 @@ namespace UnityNinja.Editor
             if (rootObject == null) return null;
 
             GameObject rootGO = new GameObject(rootName);
+            string modelFolder = (ctx != null && !string.IsNullOrEmpty(ctx.assetPath)) ? Path.GetDirectoryName(ctx.assetPath) : "";
 
-            // Persistent 32K hardware vertex pool for Chunk models across the hierarchy
             ChunkVertexEntry[] globalChunkVertexBuffer = new ChunkVertexEntry[32768];
-
             bool isSkinnedHierarchy = HasSkinning(rootObject);
 
-            BuildNode(rootObject, rootGO.transform, scale, generateColliders, ctx, nodeTransforms, globalChunkVertexBuffer);
+            BuildNode(rootObject, rootGO.transform, rootName, modelFolder, settings, texNameList, ctx, nodeTransforms, globalChunkVertexBuffer);
 
             if (isSkinnedHierarchy)
             {
@@ -50,8 +50,10 @@ namespace UnityNinja.Editor
         private static void BuildNode(
             NJS_OBJECT node,
             Transform parentTransform,
-            float scale,
-            bool generateColliders,
+            string assetName,
+            string modelFolder,
+            NinjaImportSettings settings,
+            string[] texNameList,
             AssetImportContext ctx,
             List<Transform> nodeTransforms,
             ChunkVertexEntry[] globalChunkVertexBuffer)
@@ -61,13 +63,13 @@ namespace UnityNinja.Editor
             GameObject nodeGO = new GameObject(node.Name);
             nodeGO.transform.SetParent(parentTransform, false);
 
-            nodeGO.transform.localPosition = NinjaCoordinateUtility.ToUnityPosition(node.Position, scale);
+            nodeGO.transform.localPosition = NinjaCoordinateUtility.ToUnityPosition(node.Position, settings.Scale);
             nodeGO.transform.localEulerAngles = NinjaCoordinateUtility.ToUnityEuler(node.Rotation);
             nodeGO.transform.localScale = (node.Scale == Vector3.zero) ? Vector3.one : node.Scale;
 
             nodeTransforms.Add(nodeGO.transform);
 
-            // Mesh Attachment
+            // Mesh Attachment & Material Assignment
             if (node.Attach != null && !node.SkipDraw)
             {
                 Mesh mesh = null;
@@ -76,19 +78,65 @@ namespace UnityNinja.Editor
 
                 if (node.Attach is BasicAttach basic)
                 {
-                    mesh = NinjaMeshResolver.CreateMeshFromBasicAttach(basic, scale, $"{node.Name}_Mesh", out mats);
+                    mesh = NinjaMeshResolver.CreateMeshFromBasicAttach(
+                        basic,
+                        settings.Scale,
+                        $"{node.Name}_Mesh",
+                        node.Name,
+                        assetName,
+                        modelFolder,
+                        texNameList,
+                        settings,
+                        ctx,
+                        out mats
+                    );
                 }
                 else if (node.Attach is ChunkAttach chunk)
                 {
-                    mesh = NinjaMeshResolver.CreateMeshFromChunkAttach(chunk, scale, $"{node.Name}_Mesh", globalChunkVertexBuffer, out mats);
+                    mesh = NinjaMeshResolver.CreateMeshFromChunkAttach(
+                        chunk,
+                        settings.Scale,
+                        $"{node.Name}_Mesh",
+                        node.Name,
+                        assetName,
+                        modelFolder,
+                        texNameList,
+                        globalChunkVertexBuffer,
+                        settings,
+                        ctx,
+                        out mats
+                    );
                 }
                 else if (node.Attach is GCAttach gc)
                 {
-                    mesh = NinjaMeshResolver.CreateMeshFromGCAttach(gc, scale, $"{node.Name}_Mesh", out mats, out weights);
+                    mesh = NinjaMeshResolver.CreateMeshFromGCAttach(
+                        gc,
+                        settings.Scale,
+                        $"{node.Name}_Mesh",
+                        node.Name,
+                        assetName,
+                        modelFolder,
+                        texNameList,
+                        settings,
+                        ctx,
+                        out mats,
+                        out weights
+                    );
                 }
                 else if (node.Attach is XJAttach xj)
                 {
-                    mesh = NinjaMeshResolver.CreateMeshFromXJAttach(xj, scale, $"{node.Name}_Mesh", out mats);
+                    mesh = NinjaMeshResolver.CreateMeshFromXJAttach(
+                        xj,
+                        settings.Scale,
+                        $"{node.Name}_Mesh",
+                        node.Name,
+                        assetName,
+                        modelFolder,
+                        texNameList,
+                        settings,
+                        ctx,
+                        out mats
+                    );
                 }
 
                 if (mesh != null)
@@ -109,7 +157,7 @@ namespace UnityNinja.Editor
                         MeshRenderer mr = nodeGO.AddComponent<MeshRenderer>();
                         mr.sharedMaterials = mats;
 
-                        if (generateColliders)
+                        if (settings.GenerateMeshColliders)
                         {
                             MeshCollider mc = nodeGO.AddComponent<MeshCollider>();
                             mc.sharedMesh = mesh;
@@ -122,7 +170,7 @@ namespace UnityNinja.Editor
             {
                 foreach (var child in node.Children)
                 {
-                    BuildNode(child, nodeGO.transform, scale, generateColliders, ctx, nodeTransforms, globalChunkVertexBuffer);
+                    BuildNode(child, nodeGO.transform, assetName, modelFolder, settings, texNameList, ctx, nodeTransforms, globalChunkVertexBuffer);
                 }
             }
         }

@@ -11,6 +11,8 @@ namespace UnityNinja
         public Dictionary<int, NinjaRotation> Rotation = new Dictionary<int, NinjaRotation>();
         public Dictionary<int, Vector3> Scale = new Dictionary<int, Vector3>();
         public Dictionary<int, Vector3> Vector = new Dictionary<int, Vector3>();
+        public Dictionary<int, Vector3[]> Vertex = new Dictionary<int, Vector3[]>();
+        public Dictionary<int, Vector3[]> Normal = new Dictionary<int, Vector3[]>();
         public Dictionary<int, Vector3> Target = new Dictionary<int, Vector3>();
         public Dictionary<int, int> Roll = new Dictionary<int, int>();
         public Dictionary<int, int> Angle = new Dictionary<int, int>();
@@ -22,10 +24,12 @@ namespace UnityNinja
         public string RotationName { get; set; }
         public string ScaleName { get; set; }
         public string VectorName { get; set; }
+        public string VertexName { get; set; }
+        public string NormalName { get; set; }
 
         public bool HasData => Position.Count > 0 || Rotation.Count > 0 || Scale.Count > 0 ||
-                               Vector.Count > 0 || Target.Count > 0 || Roll.Count > 0 ||
-                               Angle.Count > 0 || Color.Count > 0 || Intensity.Count > 0 ||
-                               Quaternion.Count > 0;
+                               Vector.Count > 0 || Vertex.Count > 0 || Normal.Count > 0 ||
+                               Target.Count > 0 || Roll.Count > 0 || Angle.Count > 0 ||
+                               Color.Count > 0 || Intensity.Count > 0 || Quaternion.Count > 0;
     }
 }

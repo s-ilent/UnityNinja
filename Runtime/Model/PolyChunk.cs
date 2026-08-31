@@ -1,3 +1,6 @@
+// ============================================================================
+// File: Runtime/Model/PolyChunk.cs (Updated with Cache, Volume & Bump Chunks)
+// ============================================================================
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -9,8 +12,19 @@ namespace UnityNinja
     public abstract class PolyChunk
     {
         public ushort Header;
-        public ChunkType Type => (ChunkType)(Header & 0xFF);
-        public byte Flags => (byte)(Header >> 8);
+
+        public ChunkType Type
+        {
+            get => (ChunkType)(Header & 0xFF);
+            protected set => Header = (ushort)((Header & 0xFF00) | (byte)value);
+        }
+
+        public byte Flags
+        {
+            get => (byte)(Header >> 8);
+            set => Header = (ushort)((Header & 0xFF) | (ushort)(value << 8));
+        }
+
         public abstract int ByteSize { get; }
 
         public static PolyChunk Load(byte[] file, int address)
@@ -23,10 +37,14 @@ namespace UnityNinja
                 ChunkType.Null => new PolyChunkNull(),
                 ChunkType.End => new PolyChunkEnd(),
                 ChunkType.Bits_BlendAlpha => new PolyChunkBitsBlendAlpha(file, address),
+                ChunkType.Bits_CachePolygonList => new PolyChunkBitsCachePolygonList(file, address),
+                ChunkType.Bits_DrawPolygonList => new PolyChunkBitsDrawPolygonList(file, address),
                 ChunkType.Tiny_TextureID or ChunkType.Tiny_TextureID2 => new PolyChunkTinyTextureID(file, address),
                 ChunkType.Material_Diffuse or ChunkType.Material_Ambient or ChunkType.Material_DiffuseAmbient or
                 ChunkType.Material_Specular or ChunkType.Material_DiffuseSpecular or ChunkType.Material_AmbientSpecular or
                 ChunkType.Material_DiffuseAmbientSpecular => new PolyChunkMaterial(file, address),
+                ChunkType.Material_Bump => new PolyChunkMaterialBump(file, address),
+                ChunkType.Volume_Polygon3 or ChunkType.Volume_Polygon4 or ChunkType.Volume_Strip => new PolyChunkVolume(file, address),
                 ChunkType.Strip_Strip or ChunkType.Strip_StripUVN or ChunkType.Strip_StripUVH or
                 ChunkType.Strip_StripNormal or ChunkType.Strip_StripUVNNormal or ChunkType.Strip_StripUVHNormal or
                 ChunkType.Strip_StripColor or ChunkType.Strip_StripUVNColor or ChunkType.Strip_StripUVHColor or
@@ -53,10 +71,42 @@ namespace UnityNinja
     }
 
     [Serializable]
+    public class PolyChunkBitsCachePolygonList : PolyChunk
+    {
+        public byte List => Flags;
+        public override int ByteSize => 2;
+        public PolyChunkBitsCachePolygonList(byte[] file, int address)
+        {
+            Header = ByteConverter.ToUInt16(file, address);
+        }
+    }
+
+    [Serializable]
+    public class PolyChunkBitsDrawPolygonList : PolyChunk
+    {
+        public byte List => Flags;
+        public override int ByteSize => 2;
+        public PolyChunkBitsDrawPolygonList(byte[] file, int address)
+        {
+            Header = ByteConverter.ToUInt16(file, address);
+        }
+    }
+
+    [Serializable]
     public class PolyChunkBitsBlendAlpha : PolyChunk
     {
-        public AlphaInstruction SourceAlpha => (AlphaInstruction)((Flags >> 3) & 7);
-        public AlphaInstruction DestinationAlpha => (AlphaInstruction)(Flags & 7);
+        public AlphaInstruction SourceAlpha
+        {
+            get => (AlphaInstruction)((Flags >> 3) & 7);
+            set => Flags = (byte)((Flags & ~0x38) | (((byte)value & 7) << 3));
+        }
+
+        public AlphaInstruction DestinationAlpha
+        {
+            get => (AlphaInstruction)(Flags & 7);
+            set => Flags = (byte)((Flags & ~7) | ((byte)value & 7));
+        }
+
         public override int ByteSize => 2;
 
         public PolyChunkBitsBlendAlpha(byte[] file, int address)
@@ -86,6 +136,18 @@ namespace UnityNinja
     [Serializable]
     public class PolyChunkMaterial : PolyChunk
     {
+        public AlphaInstruction SourceAlpha
+        {
+            get => (AlphaInstruction)((Flags >> 3) & 7);
+            set => Flags = (byte)((Flags & ~0x38) | (((byte)value & 7) << 3));
+        }
+
+        public AlphaInstruction DestinationAlpha
+        {
+            get => (AlphaInstruction)(Flags & 7);
+            set => Flags = (byte)((Flags & ~7) | ((byte)value & 7));
+        }
+
         public Color32? Diffuse;
         public Color32? Ambient;
         public Color32? Specular;
@@ -104,6 +166,62 @@ namespace UnityNinja
             {
                 Diffuse = NinjaColor.FromBytes(file, address, true);
                 address += 4;
+            }
+        }
+    }
+
+    [Serializable]
+    public class PolyChunkMaterialBump : PolyChunk
+    {
+        public short DX, DY, DZ, UX, UY, UZ;
+        public override int ByteSize => 16;
+
+        public PolyChunkMaterialBump(byte[] file, int address)
+        {
+            Header = ByteConverter.ToUInt16(file, address);
+            DX = ByteConverter.ToInt16(file, address + 4);
+            DY = ByteConverter.ToInt16(file, address + 6);
+            DZ = ByteConverter.ToInt16(file, address + 8);
+            UX = ByteConverter.ToInt16(file, address + 10);
+            UY = ByteConverter.ToInt16(file, address + 12);
+            UZ = ByteConverter.ToInt16(file, address + 14);
+        }
+    }
+
+    [Serializable]
+    public class PolyChunkVolume : PolyChunk
+    {
+        public ushort Header2;
+        public byte UserFlags => (byte)(Header2 >> 14);
+        public ushort PolyCount => (ushort)(Header2 & 0x3FFF);
+        public List<ushort[]> Polys = new List<ushort[]>();
+        public ushort Size;
+        public override int ByteSize => (Size * 2) + 4;
+
+        public PolyChunkVolume(byte[] file, int address)
+        {
+            Header = ByteConverter.ToUInt16(file, address);
+            Size = ByteConverter.ToUInt16(file, address + 2);
+            Header2 = ByteConverter.ToUInt16(file, address + 4);
+            int polyCount = PolyCount;
+            address += 6;
+
+            int countPerPoly = Type switch
+            {
+                ChunkType.Volume_Polygon3 => 3,
+                ChunkType.Volume_Polygon4 => 4,
+                _ => 3
+            };
+
+            for (int i = 0; i < polyCount && address + countPerPoly * 2 <= file.Length; i++)
+            {
+                ushort[] idxs = new ushort[countPerPoly];
+                for (int k = 0; k < countPerPoly; k++)
+                {
+                    idxs[k] = ByteConverter.ToUInt16(file, address);
+                    address += 2;
+                }
+                Polys.Add(idxs);
             }
         }
     }

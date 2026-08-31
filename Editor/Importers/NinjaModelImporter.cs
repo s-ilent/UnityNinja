@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
 using UnityEditor.AssetImporters;
@@ -7,7 +8,7 @@ using UnityNinja;
 
 namespace UnityNinja.Editor
 {
-    [ScriptedImporter(1, new[] { "nj", "njb", "gj", "gjb", "xj" })]
+    [ScriptedImporter(2, new[] { "nj", "njb", "gj", "gjb", "xj" })]
     public class NinjaModelImporter : ScriptedImporter
     {
         [Header("Transform")]
@@ -16,10 +17,39 @@ namespace UnityNinja.Editor
         [Header("Physics")]
         public bool m_GenerateMeshColliders = false;
 
+        [Header("Materials")]
+        public bool m_ImportMaterials = true;
+        public MaterialLocation m_MaterialLocation = MaterialLocation.EmbedInPrefab;
+        public MaterialNaming m_MaterialNaming = MaterialNaming.ByMaterialName;
+        public MaterialSearch m_MaterialSearch = MaterialSearch.RecursiveSubFolder;
+        public string m_MaterialSearchPath = "Assets/Materials";
+        public string[] m_TextureSearchPaths = Array.Empty<string>();
+        public List<MaterialRemapEntry> m_MaterialRemaps = new List<MaterialRemapEntry>();
+        public List<TextureRemapEntry> m_TextureRemaps = new List<TextureRemapEntry>();
+
+        [Header("Animation")]
+        public bool m_ImportAnimation = true;
+
+        public NinjaImportSettings GetSettings() => new NinjaImportSettings
+        {
+            Scale = m_Scale,
+            GenerateMeshColliders = m_GenerateMeshColliders,
+            ImportMaterials = m_ImportMaterials,
+            MaterialLocation = m_MaterialLocation,
+            MaterialNaming = m_MaterialNaming,
+            MaterialSearch = m_MaterialSearch,
+            MaterialSearchPath = m_MaterialSearchPath,
+            TextureSearchPaths = m_TextureSearchPaths ?? Array.Empty<string>(),
+            MaterialRemaps = m_MaterialRemaps,
+            TextureRemaps = m_TextureRemaps,
+            ImportAnimation = m_ImportAnimation
+        };
+
         public override void OnImportAsset(AssetImportContext ctx)
         {
             string ext = Path.GetExtension(ctx.assetPath).ToLowerInvariant();
             string assetName = Path.GetFileNameWithoutExtension(ctx.assetPath);
+            NinjaImportSettings settings = GetSettings();
 
             try
             {
@@ -36,17 +66,32 @@ namespace UnityNinja.Editor
                 if (njFile.Models.Count > 0)
                 {
                     NJS_OBJECT rootModel = njFile.Models[0];
+                    string[] texNameList = (njFile.Texnames != null && njFile.Texnames.Count > 0) ? njFile.Texnames[0] : null;
+
                     GameObject rootGO = NinjaObjectResolver.ResolveHierarchy(
                         rootModel,
                         assetName,
-                        m_Scale,
-                        m_GenerateMeshColliders,
+                        settings,
+                        texNameList,
                         ctx,
-                        out _
+                        out List<Transform> nodeTransforms
                     );
 
                     if (rootGO != null)
                     {
+                        if (settings.ImportAnimation)
+                        {
+                            NinjaAnimatorResolver.SetupModelAnimations(
+                                rootModel,
+                                rootGO,
+                                nodeTransforms,
+                                assetName,
+                                ctx.assetPath,
+                                settings.Scale,
+                                ctx
+                            );
+                        }
+
                         ctx.AddObjectToAsset("main", rootGO);
                         ctx.SetMainObject(rootGO);
                         return;

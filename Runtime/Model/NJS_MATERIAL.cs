@@ -16,18 +16,71 @@ namespace UnityNinja
 
         public const int Size = 20;
 
-        public bool UseAlpha => (Flags & 0x100000) != 0;
-        public bool UseTexture => (Flags & 0x200000) != 0;
-        public bool EnvironmentMap => (Flags & 0x400000) != 0;
-        public bool DoubleSided => (Flags & 0x800000) != 0;
-        public bool IgnoreLighting => (Flags & 0x2000000) != 0;
-        public bool ClampU => (Flags & 0x10000) != 0;
-        public bool ClampV => (Flags & 0x8000) != 0;
-        public bool FlipU => (Flags & 0x40000) != 0;
-        public bool FlipV => (Flags & 0x20000) != 0;
+        public bool UseAlpha
+        {
+            get => (Flags & 0x100000) != 0;
+            set => Flags = (uint)((Flags & ~0x100000) | (value ? 0x100000u : 0));
+        }
 
-        public AlphaInstruction DestinationAlpha => (AlphaInstruction)((Flags >> 26) & 7);
-        public AlphaInstruction SourceAlpha => (AlphaInstruction)((Flags >> 29) & 7);
+        public bool UseTexture
+        {
+            get => (Flags & 0x200000) != 0;
+            set => Flags = (uint)((Flags & ~0x200000) | (value ? 0x200000u : 0));
+        }
+
+        public bool EnvironmentMap
+        {
+            get => (Flags & 0x400000) != 0;
+            set => Flags = (uint)((Flags & ~0x400000) | (value ? 0x400000u : 0));
+        }
+
+        public bool DoubleSided
+        {
+            get => (Flags & 0x800000) != 0;
+            set => Flags = (uint)((Flags & ~0x800000) | (value ? 0x800000u : 0));
+        }
+
+        public bool IgnoreLighting
+        {
+            get => (Flags & 0x2000000) != 0;
+            set => Flags = (uint)((Flags & ~0x2000000) | (value ? 0x2000000u : 0));
+        }
+
+        public bool ClampU
+        {
+            get => (Flags & 0x10000) != 0;
+            set => Flags = (uint)((Flags & ~0x10000) | (value ? 0x10000u : 0));
+        }
+
+        public bool ClampV
+        {
+            get => (Flags & 0x8000) != 0;
+            set => Flags = (uint)((Flags & ~0x8000) | (value ? 0x8000u : 0));
+        }
+
+        public bool FlipU
+        {
+            get => (Flags & 0x40000) != 0;
+            set => Flags = (uint)((Flags & ~0x40000) | (value ? 0x40000u : 0));
+        }
+
+        public bool FlipV
+        {
+            get => (Flags & 0x20000) != 0;
+            set => Flags = (uint)((Flags & ~0x20000) | (value ? 0x20000u : 0));
+        }
+
+        public AlphaInstruction DestinationAlpha
+        {
+            get => (AlphaInstruction)((Flags >> 26) & 7);
+            set => Flags = (uint)((Flags & ~0x1C000000) | (((uint)value & 7) << 26));
+        }
+
+        public AlphaInstruction SourceAlpha
+        {
+            get => (AlphaInstruction)((Flags >> 29) & 7);
+            set => Flags = (uint)((Flags & ~0xE0000000) | (((uint)value & 7) << 29));
+        }
 
         public NJS_MATERIAL() { }
 

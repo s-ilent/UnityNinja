@@ -7,7 +7,7 @@ using UnityNinja;
 
 namespace UnityNinja.Editor
 {
-    [ScriptedImporter(1, new[] { "sa1lvl", "sa2lvl", "sa2blvl", "salvl" })]
+    [ScriptedImporter(2, new[] { "sa1lvl", "sa2lvl", "sa2blvl", "salvl" })]
     public class NinjaLandTableImporter : ScriptedImporter
     {
         [Header("Transform")]
@@ -32,7 +32,6 @@ namespace UnityNinja.Editor
                     _ => ModelFormat.Basic
                 };
 
-                // Read header offset
                 int headerAddr = (rawData.Length >= 16) ? BitConverter.ToInt32(rawData, 8) : 0;
                 LandTable landTable = new LandTable(rawData, headerAddr, 0, format);
 
@@ -54,11 +53,17 @@ namespace UnityNinja.Editor
 
                     Transform targetParent = isVisible ? geoRoot.transform : colRoot.transform;
 
+                    var colSettings = new NinjaImportSettings
+                    {
+                        Scale = m_Scale,
+                        GenerateMeshColliders = isSolid
+                    };
+
                     GameObject colGO = NinjaObjectResolver.ResolveHierarchy(
                         col.Model,
                         $"{col.Model.Name}_[COL_{i:000}]",
-                        m_Scale,
-                        isSolid,
+                        colSettings,
+                        null,
                         ctx,
                         out _
                     );

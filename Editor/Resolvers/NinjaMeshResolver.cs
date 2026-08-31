@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityNinja;
 using UnityNinja.GC;
@@ -17,8 +18,20 @@ namespace UnityNinja.Editor
 
     public static class NinjaMeshResolver
     {
-        #region 1. Basic Attach (NJS_MODEL / NJBM)
-        public static Mesh CreateMeshFromBasicAttach(BasicAttach attach, float scale, string name, out Material[] materials)
+        private static readonly List<PolyChunk>[] PolyCache = new List<PolyChunk>[255];
+
+        #region 1. Basic Attach
+        public static Mesh CreateMeshFromBasicAttach(
+            BasicAttach attach,
+            float scale,
+            string name,
+            string nodeName,
+            string assetName,
+            string modelFolder,
+            string[] texNameList,
+            NinjaImportSettings settings,
+            UnityEditor.AssetImporters.AssetImportContext ctx,
+            out Material[] materials)
         {
             materials = Array.Empty<Material>();
             if (attach?.Vertices == null || attach.Vertices.Length == 0 || attach.MeshSets.Count == 0)
@@ -31,10 +44,10 @@ namespace UnityNinja.Editor
 
             List<List<int>> submeshTriangles = new List<List<int>>();
             List<Material> matList = new List<Material>();
-            Material defaultMat = new Material(Shader.Find("Standard"));
 
-            foreach (var meshSet in attach.MeshSets)
+            for (int m = 0; m < attach.MeshSets.Count; m++)
             {
+                var meshSet = attach.MeshSets[m];
                 List<int> tris = new List<int>();
                 int uvCursor = 0;
                 int colCursor = 0;
@@ -75,9 +88,7 @@ namespace UnityNinja.Editor
 
                     if (poly is NinjaTriangle)
                     {
-                        tris.Add(localIdxs[0]);
-                        tris.Add(localIdxs[2]);
-                        tris.Add(localIdxs[1]);
+                        tris.Add(localIdxs[0]); tris.Add(localIdxs[2]); tris.Add(localIdxs[1]);
                     }
                     else if (poly is NinjaQuad)
                     {
@@ -91,15 +102,11 @@ namespace UnityNinja.Editor
                         {
                             if (flip)
                             {
-                                tris.Add(localIdxs[k]);
-                                tris.Add(localIdxs[k + 2]);
-                                tris.Add(localIdxs[k + 1]);
+                                tris.Add(localIdxs[k]); tris.Add(localIdxs[k + 2]); tris.Add(localIdxs[k + 1]);
                             }
                             else
                             {
-                                tris.Add(localIdxs[k + 1]);
-                                tris.Add(localIdxs[k + 2]);
-                                tris.Add(localIdxs[k]);
+                                tris.Add(localIdxs[k + 1]); tris.Add(localIdxs[k + 2]); tris.Add(localIdxs[k]);
                             }
                             flip = !flip;
                         }
@@ -109,7 +116,23 @@ namespace UnityNinja.Editor
                 if (tris.Count > 0)
                 {
                     submeshTriangles.Add(tris);
-                    matList.Add(defaultMat);
+
+                    NJS_MATERIAL nMat = (attach.Materials != null && meshSet.MaterialID < attach.Materials.Count)
+                        ? attach.Materials[meshSet.MaterialID]
+                        : null;
+
+                    Material resolvedMat = NinjaMaterialResolver.ResolveMaterial(
+                        nMat,
+                        meshSet.MaterialID,
+                        nodeName,
+                        assetName,
+                        modelFolder,
+                        texNameList,
+                        settings,
+                        ctx
+                    );
+
+                    matList.Add(resolvedMat);
                 }
             }
 
@@ -135,18 +158,24 @@ namespace UnityNinja.Editor
         }
         #endregion
 
-        #region 2. Chunk Attach (NJS_CNK_MODEL / NJCM)
+        #region 2. Chunk Attach with PolyCache & Volume Resolution
         public static Mesh CreateMeshFromChunkAttach(
             ChunkAttach attach,
             float scale,
             string name,
+            string nodeName,
+            string assetName,
+            string modelFolder,
+            string[] texNameList,
             ChunkVertexEntry[] globalVertexBuffer,
+            NinjaImportSettings settings,
+            UnityEditor.AssetImporters.AssetImportContext ctx,
             out Material[] materials)
         {
             materials = Array.Empty<Material>();
             if (attach == null) return null;
 
-            // 1. Upload vertices declared on this attach into the global vertex pool
+            // 1. Upload vertices into global pool
             if (attach.VertexChunks != null)
             {
                 foreach (var vc in attach.VertexChunks)
@@ -174,19 +203,37 @@ namespace UnityNinja.Editor
 
             if (attach.PolyChunks == null || attach.PolyChunks.Count == 0) return null;
 
-            // 2. Build local vertex buffer for this mesh by reading from global pool
+            // Flatten PolyChunks with Polygon Cache resolution
+            List<PolyChunk> resolvedPolyChunks = FlattenPolyChunks(attach.PolyChunks);
+
             List<Vector3> localPositions = new List<Vector3>();
             List<Vector3> localNormals = new List<Vector3>();
             List<Color32> localColors = new List<Color32>();
             List<Vector2> localUVs = new List<Vector2>();
 
             List<List<int>> submeshes = new List<List<int>>();
-            List<int> currentTriangles = new List<int>();
+            List<Material> matList = new List<Material>();
 
-            foreach (var pc in attach.PolyChunks)
+            NJS_MATERIAL currentMaterialState = new NJS_MATERIAL();
+            int currentMaterialIndex = 0;
+
+            foreach (var pc in resolvedPolyChunks)
             {
-                if (pc is PolyChunkStrip stripChunk)
+                if (pc is PolyChunkTinyTextureID tid)
                 {
+                    currentMaterialState.TextureID = tid.TextureID;
+                    currentMaterialIndex = tid.TextureID;
+                }
+                else if (pc is PolyChunkMaterial matChunk)
+                {
+                    if (matChunk.Diffuse.HasValue) currentMaterialState.DiffuseColor = matChunk.Diffuse.Value;
+                    currentMaterialState.SourceAlpha = matChunk.SourceAlpha;
+                    currentMaterialState.DestinationAlpha = matChunk.DestinationAlpha;
+                }
+                else if (pc is PolyChunkStrip stripChunk)
+                {
+                    List<int> currentTriangles = new List<int>();
+
                     foreach (var strip in stripChunk.Strips)
                     {
                         if (strip.Indexes == null || strip.Indexes.Length < 3) continue;
@@ -241,12 +288,25 @@ namespace UnityNinja.Editor
                             flip = !flip;
                         }
                     }
-                }
-            }
 
-            if (currentTriangles.Count > 0)
-            {
-                submeshes.Add(currentTriangles);
+                    if (currentTriangles.Count > 0)
+                    {
+                        submeshes.Add(currentTriangles);
+
+                        Material resolved = NinjaMaterialResolver.ResolveMaterial(
+                            currentMaterialState,
+                            currentMaterialIndex,
+                            nodeName,
+                            assetName,
+                            modelFolder,
+                            texNameList,
+                            settings,
+                            ctx
+                        );
+
+                        matList.Add(resolved);
+                    }
+                }
             }
 
             if (localPositions.Count == 0 || submeshes.Count == 0) return null;
@@ -266,19 +326,93 @@ namespace UnityNinja.Editor
             }
 
             mesh.RecalculateBounds();
-            materials = new Material[submeshes.Count];
-            Material defaultMat = new Material(Shader.Find("Standard"));
-            for (int i = 0; i < materials.Length; i++) materials[i] = defaultMat;
-
+            materials = matList.ToArray();
             return mesh;
+        }
+
+        private static List<PolyChunk> FlattenPolyChunks(List<PolyChunk> chunks)
+        {
+            List<PolyChunk> result = new List<PolyChunk>();
+
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                var c = chunks[i];
+                if (c is PolyChunkBitsCachePolygonList cache)
+                {
+                    PolyCache[cache.List] = chunks.Skip(i + 1).ToList();
+                    return result;
+                }
+                else if (c is PolyChunkBitsDrawPolygonList draw)
+                {
+                    if (PolyCache[draw.List] != null)
+                    {
+                        result.AddRange(FlattenPolyChunks(PolyCache[draw.List]));
+                    }
+                }
+                else
+                {
+                    result.Add(c);
+                }
+            }
+
+            return result;
         }
         #endregion
 
-        #region 3. Ginja Attach (GCAttach / GJCM)
+        #region 3. Shape Motion / BlendShape Baking
+        public static void BakeShapeMotionBlendShapes(
+            Mesh mesh,
+            NJS_OBJECT node,
+            AnimModelData animData,
+            float scale)
+        {
+            if (mesh == null || animData == null || (animData.Vertex.Count == 0 && animData.Normal.Count == 0))
+                return;
+        
+            Vector3[] baseVertices = mesh.vertices;
+            Vector3[] baseNormals = mesh.normals;
+        
+            foreach (var kvp in animData.Vertex)
+            {
+                int frame = kvp.Key;
+                Vector3[] targetVerts = kvp.Value;
+                Vector3[] targetNormals = animData.Normal.ContainsKey(frame) ? animData.Normal[frame] : null;
+        
+                Vector3[] deltaVertices = new Vector3[baseVertices.Length];
+                Vector3[] deltaNormals = new Vector3[baseNormals.Length];
+        
+                for (int i = 0; i < baseVertices.Length; i++)
+                {
+                    if (i < targetVerts.Length)
+                    {
+                        Vector3 targetPos = NinjaCoordinateUtility.ToUnityPosition(targetVerts[i], scale);
+                        deltaVertices[i] = targetPos - baseVertices[i];
+                    }
+        
+                    if (targetNormals != null && i < targetNormals.Length)
+                    {
+                        Vector3 targetNorm = NinjaCoordinateUtility.ToUnityNormal(targetNormals[i]);
+                        deltaNormals[i] = targetNorm - baseNormals[i];
+                    }
+                }
+        
+                string shapeName = $"Shape_Frame_{frame}";
+                mesh.AddBlendShapeFrame(shapeName, 100.0f, deltaVertices, deltaNormals, null);
+            }
+        }
+        #endregion
+
+        #region 4. Ginja & Xinja Attach Decoders
         public static Mesh CreateMeshFromGCAttach(
             GCAttach attach,
             float scale,
             string name,
+            string nodeName,
+            string assetName,
+            string modelFolder,
+            string[] texNameList,
+            NinjaImportSettings settings,
+            UnityEditor.AssetImporters.AssetImportContext ctx,
             out Material[] materials,
             out BoneWeight[] boneWeights)
         {
@@ -341,17 +475,33 @@ namespace UnityNinja.Editor
 
             List<List<int>> submeshes = new List<List<int>>();
             List<Material> matList = new List<Material>();
-            Material defaultMat = new Material(Shader.Find("Standard"));
 
-            foreach (var mesh in allMeshes)
+            for (int m = 0; m < allMeshes.Count; m++)
             {
+                var mesh = allMeshes[m];
                 List<int> triangles = new List<int>();
                 float uvScaleDivisor = 1.0f;
+
+                NJS_MATERIAL matState = new NJS_MATERIAL();
                 foreach (var param in mesh.Parameters)
                 {
                     if (param.Type == ParameterType.VtxAttrFmt && param.VertexAttribute == GCVertexAttribute.Tex0)
                     {
                         uvScaleDivisor = GCUVScaleHelper.GetDivisor(param.UVScale);
+                    }
+                    else if (param.Type == ParameterType.Texture)
+                    {
+                        matState.TextureID = param.TextureID;
+                    }
+                    else if (param.Type == ParameterType.DiffuseColor)
+                    {
+                        matState.DiffuseColor = param.Color;
+                    }
+                    else if (param.Type == ParameterType.BlendAlpha)
+                    {
+                        matState.SourceAlpha = param.SourceAlpha;
+                        matState.DestinationAlpha = param.DestAlpha;
+                        matState.Flags |= 0x100000;
                     }
                 }
 
@@ -376,7 +526,19 @@ namespace UnityNinja.Editor
                 if (triangles.Count > 0)
                 {
                     submeshes.Add(triangles);
-                    matList.Add(defaultMat);
+
+                    Material resolved = NinjaMaterialResolver.ResolveMaterial(
+                        matState,
+                        m,
+                        nodeName,
+                        assetName,
+                        modelFolder,
+                        texNameList,
+                        settings,
+                        ctx
+                    );
+
+                    matList.Add(resolved);
                 }
             }
 
@@ -403,10 +565,18 @@ namespace UnityNinja.Editor
             materials = matList.ToArray();
             return uMesh;
         }
-        #endregion
 
-        #region 4. Xinja Attach (XJAttach / XJCM)
-        public static Mesh CreateMeshFromXJAttach(XJAttach attach, float scale, string name, out Material[] materials)
+        public static Mesh CreateMeshFromXJAttach(
+            XJAttach attach,
+            float scale,
+            string name,
+            string nodeName,
+            string assetName,
+            string modelFolder,
+            string[] texNameList,
+            NinjaImportSettings settings,
+            UnityEditor.AssetImporters.AssetImportContext ctx,
+            out Material[] materials)
         {
             materials = Array.Empty<Material>();
             if (attach == null || attach.VertexSets.Count == 0) return null;
@@ -427,19 +597,31 @@ namespace UnityNinja.Editor
 
             List<List<int>> submeshes = new List<List<int>>();
             List<Material> matList = new List<Material>();
-            Material defaultMat = new Material(Shader.Find("Standard"));
 
             List<XJMesh> allMeshes = new List<XJMesh>();
             allMeshes.AddRange(attach.OpaqueMeshes);
             allMeshes.AddRange(attach.TranslucentMeshes);
 
-            foreach (var mesh in allMeshes)
+            for (int m = 0; m < allMeshes.Count; m++)
             {
+                var mesh = allMeshes[m];
                 List<int> tris = mesh.TriangulateStrips();
                 if (tris.Count > 0)
                 {
                     submeshes.Add(tris);
-                    matList.Add(defaultMat);
+
+                    Material resolved = NinjaMaterialResolver.ResolveMaterial(
+                        mesh.Material,
+                        m,
+                        nodeName,
+                        assetName,
+                        modelFolder,
+                        texNameList,
+                        settings,
+                        ctx
+                    );
+
+                    matList.Add(resolved);
                 }
             }
 
