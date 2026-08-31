@@ -237,6 +237,7 @@ namespace UnityNinja.Editor
             if (attach == null) return null;
 
             // 1. Upload vertices & bone weights into global pool
+            // Inside CreateMeshFromChunkAttach:
             if (attach.VertexChunks != null)
             {
                 foreach (var vc in attach.VertexChunks)
@@ -256,7 +257,6 @@ namespace UnityNinja.Editor
                             Color32 col = (i < vc.Diffuse.Count) ? vc.Diffuse[i] : new Color32(255, 255, 255, 255);
 
                             BoneWeight bw = default;
-                            bool hasWeight = false;
 
                             if (isWeighted && vc.NinjaFlags != null && i < vc.NinjaFlags.Count)
                             {
@@ -266,7 +266,7 @@ namespace UnityNinja.Editor
 
                                 uint rawW = (nFlag >> 16) & 0xFFFF;
                                 float weightVal = rawW > 255 ? (rawW / 65535.0f) : (rawW / 255.0f);
-                                if (weightVal <= 0.0f) weightVal = 1.0f;
+                                if (weightVal <= 0.0f) weightVal = 1.0f; else weightVal = weightVal;
 
                                 if (actualTarget >= 0 && actualTarget < globalVertexBuffer.Length)
                                 {
@@ -274,7 +274,6 @@ namespace UnityNinja.Editor
                                     {
                                         bw.boneIndex0 = nodeIndex;
                                         bw.weight0 = weightVal;
-                                        hasWeight = true;
 
                                         globalVertexBuffer[actualTarget] = new ChunkVertexEntry
                                         {
@@ -299,6 +298,10 @@ namespace UnityNinja.Editor
                                 continue;
                             }
 
+                            // For non-weighted chunks in a skinned skeleton: 100% bound to declaring bone
+                            bw.boneIndex0 = nodeIndex;
+                            bw.weight0 = 1.0f;
+
                             globalVertexBuffer[targetIdx] = new ChunkVertexEntry
                             {
                                 Position = pos,
@@ -306,7 +309,7 @@ namespace UnityNinja.Editor
                                 Color = col,
                                 BoneWeight = bw,
                                 HasValue = true,
-                                HasWeight = hasWeight || globalVertexBuffer[targetIdx].HasWeight
+                                HasWeight = true
                             };
                         }
                     }

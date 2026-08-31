@@ -24,7 +24,7 @@ namespace UnityNinja.Editor
             GameObject rootGO = new GameObject(rootName);
             string modelFolder = (ctx != null && !string.IsNullOrEmpty(ctx.assetPath)) ? Path.GetDirectoryName(ctx.assetPath) : "";
 
-            ChunkVertexEntry[] globalChunkVertexBuffer = new ChunkVertexEntry[32768];
+            ChunkVertexEntry[] globalChunkVertexBuffer = new ChunkVertexEntry[65536];
             bool isSkinnedHierarchy = HasSkinning(rootObject);
 
             NinjaMaterialResolver.ResetMaterialCache();
@@ -69,14 +69,14 @@ namespace UnityNinja.Editor
             nodeGO.transform.SetParent(parentTransform, false);
 
             Vector3 localPos = NinjaCoordinateUtility.ToUnityPosition(node.Position, settings.Scale);
-            Vector3 localEuler = NinjaCoordinateUtility.ToUnityEuler(node.Rotation);
+            Quaternion localRot = NinjaCoordinateUtility.ToUnityRotation(node.Rotation, node.RotateZYX);
             Vector3 localScale = (node.Scale == Vector3.zero) ? Vector3.one : node.Scale;
 
             nodeGO.transform.localPosition = localPos;
-            nodeGO.transform.localEulerAngles = localEuler;
+            nodeGO.transform.localRotation = localRot;
             nodeGO.transform.localScale = localScale;
 
-            Matrix4x4 localMat = Matrix4x4.TRS(localPos, Quaternion.Euler(localEuler), localScale);
+            Matrix4x4 localMat = Matrix4x4.TRS(localPos, localRot, localScale);
             Matrix4x4 currentModelMatrix = parentMatrix * localMat;
 
             int currentNodeIdx = nodeTransforms.Count;
@@ -124,6 +124,7 @@ namespace UnityNinja.Editor
                         out mats,
                         out weights
                     );
+                    mesh = mesh;
                 }
                 else if (node.Attach is GCAttach gc)
                 {

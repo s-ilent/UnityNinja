@@ -34,6 +34,31 @@ namespace UnityNinja
         }
 
         /// <summary>
+        /// Constructs exact Unity Quaternion according to Sega Ninja's rotation order (ZYX or ZXY).
+        /// </summary>
+        public static Quaternion ToUnityRotation(Vector3 eulerDegrees, bool rotateZXY = false)
+        {
+            float rx = float.IsNaN(eulerDegrees.x) || float.IsInfinity(eulerDegrees.x) ? 0f : eulerDegrees.x;
+            float ry = float.IsNaN(eulerDegrees.y) || float.IsInfinity(eulerDegrees.y) ? 0f : -eulerDegrees.y;
+            float rz = float.IsNaN(eulerDegrees.z) || float.IsInfinity(eulerDegrees.z) ? 0f : -eulerDegrees.z;
+
+            Quaternion qX = Quaternion.AngleAxis(rx, Vector3.right);
+            Quaternion qY = Quaternion.AngleAxis(ry, Vector3.up);
+            Quaternion qZ = Quaternion.AngleAxis(rz, Vector3.forward);
+
+            if (rotateZXY)
+            {
+                // NJD_EVAL_ZXY_ANG (Z -> X -> Y in Ninja)
+                return qZ * qX * qY;
+            }
+            else
+            {
+                // Default Sega Ninja order (Z -> Y -> X in Ninja)
+                return qZ * qY * qX;
+            }
+        }
+
+        /// <summary>
         /// Maps a normal vector from Ninja space to Unity space (X -> -X).
         /// </summary>
         public static Vector3 ToUnityNormal(Vector3 normal)
