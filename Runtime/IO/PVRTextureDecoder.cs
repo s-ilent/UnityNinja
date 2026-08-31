@@ -20,9 +20,16 @@ namespace UnityNinja.IO
         SquareTwiddledMipmapped   = 0x02,
         VQ                        = 0x03,
         VQ_Mipmapped              = 0x04,
+        CLUT4_Twiddled            = 0x05,
+        CLUT8_Twiddled            = 0x06,
+        CLUT4                     = 0x07,
+        CLUT8                     = 0x08,
         Rectangle                 = 0x09,
-        Stride                    = 0x0D,
-        SmallVQ                   = 0x10
+        RectangularTwiddled       = 0x0B,
+        TwiddledRectangle         = 0x0D,
+        SmallVQ                   = 0x10,
+        SmallVQ_Mipmapped         = 0x11,
+        SquareTwiddledMipmappedAlt= 0x12
     }
 
     public static class PVRTextureDecoder
@@ -59,21 +66,25 @@ namespace UnityNinja.IO
             switch (dataFormat)
             {
                 case PVRDataFormat.Rectangle:
-                case PVRDataFormat.Stride:
+                case PVRDataFormat.CLUT4:
+                case PVRDataFormat.CLUT8:
                     DecodeLinear(pvrBytes, pixelDataOffset, width, height, colorFormat, pixels);
-                    break;
-
-                case PVRDataFormat.SquareTwiddled:
-                case PVRDataFormat.SquareTwiddledMipmapped:
-                    DecodeTwiddled(pvrBytes, pixelDataOffset, width, height, colorFormat, pixels);
                     break;
 
                 case PVRDataFormat.VQ:
                 case PVRDataFormat.VQ_Mipmapped:
                 case PVRDataFormat.SmallVQ:
+                case PVRDataFormat.SmallVQ_Mipmapped:
                     DecodeVQ(pvrBytes, pixelDataOffset, width, height, colorFormat, pixels);
                     break;
 
+                case PVRDataFormat.SquareTwiddled:
+                case PVRDataFormat.SquareTwiddledMipmapped:
+                case PVRDataFormat.SquareTwiddledMipmappedAlt:
+                case PVRDataFormat.RectangularTwiddled:
+                case PVRDataFormat.TwiddledRectangle:
+                case PVRDataFormat.CLUT4_Twiddled:
+                case PVRDataFormat.CLUT8_Twiddled:
                 default:
                     DecodeTwiddled(pvrBytes, pixelDataOffset, width, height, colorFormat, pixels);
                     break;
@@ -93,34 +104,59 @@ namespace UnityNinja.IO
 
         private static void DecodeLinear(byte[] data, int offset, int width, int height, PVRColorFormat colorFormat, Color32[] output)
         {
+            int bpp = (colorFormat == PVRColorFormat.ARGB8888) ? 4 : 2;
             int cursor = offset;
             for (int y = 0; y < height; y++)
             {
-                int rowStart = (height - 1 - y) * width; // Direct vertical inversion for Unity UV origin
+                int rowStart = (height - 1 - y) * width;
                 for (int x = 0; x < width; x++)
                 {
-                    if (cursor + 2 > data.Length) return;
-                    ushort raw = (ushort)(data[cursor] | (data[cursor + 1] << 8));
-                    cursor += 2;
-                    output[rowStart + x] = DecodePixel(raw, colorFormat);
+                    if (cursor + bpp > data.Length) return;
+
+                    if (bpp == 4)
+                    {
+                        byte b = data[cursor];
+                        byte g = data[cursor + 1];
+                        byte r = data[cursor + 2];
+                        byte a = data[cursor + 3];
+                        cursor += 4;
+                        output[rowStart + x] = new Color32(r, g, b, a);
+                    }
+                    else
+                    {
+                        ushort raw = (ushort)(data[cursor] | (data[cursor + 1] << 8));
+                        cursor += 2;
+                        output[rowStart + x] = DecodePixel16(raw, colorFormat);
+                    }
                 }
             }
         }
 
         private static void DecodeTwiddled(byte[] data, int offset, int width, int height, PVRColorFormat colorFormat, Color32[] output)
         {
+            int bpp = (colorFormat == PVRColorFormat.ARGB8888) ? 4 : 2;
             for (int y = 0; y < height; y++)
             {
                 int rowStart = (height - 1 - y) * width;
                 for (int x = 0; x < width; x++)
                 {
-                    // PowerVR hardware bit interleaving: Y is even bit, X is odd bit
-                    int morton = UntwiddlePVR(x, y);
-                    int cursor = offset + morton * 2;
-                    if (cursor + 2 <= data.Length)
+                    int morton = UntwiddlePVR(x, y, width, height);
+                    int cursor = offset + morton * bpp;
+                    if (cursor + bpp <= data.Length)
                     {
-                        ushort raw = (ushort)(data[cursor] | (data[cursor + 1] << 8));
-                        output[rowStart + x] = DecodePixel(raw, colorFormat);
+                        if (bpp == 4)
+                        {
+                            byte b = data[cursor];
+                            byte g = data[cursor + 1];
+                            byte r = data[cursor + 2];
+                            byte a = data[cursor + 3];
+                            output[rowStart + x] = new Color32(r, g, b, a);
+                        }
+                        else
+                        {
+                            ushort raw = (ushort)(data[cursor] | (data[cursor + 1] << 8));
+                            output[rowStart + x] = DecodePixel16(raw, colorFormat);
+                        }
                     }
                 }
             }
@@ -138,7 +174,7 @@ namespace UnityNinja.IO
             {
                 ushort raw = (ushort)(data[cbCursor] | (data[cbCursor + 1] << 8));
                 cbCursor += 2;
-                codebook[i] = DecodePixel(raw, colorFormat);
+                codebook[i] = DecodePixel16(raw, colorFormat);
             }
 
             int blocksW = width / 2;
@@ -148,7 +184,7 @@ namespace UnityNinja.IO
             {
                 for (int bx = 0; bx < blocksW; bx++)
                 {
-                    int morton = UntwiddlePVR(bx, by);
+                    int morton = UntwiddlePVR(bx, by, blocksW, blocksH);
                     int idxPos = indicesOffset + morton;
                     if (idxPos >= data.Length) continue;
 
@@ -174,11 +210,38 @@ namespace UnityNinja.IO
         }
 
         /// <summary>
-        /// Sega Dreamcast CLX2 PowerVR Morton unswizzle:
-        /// Bit i of Y -> Bit 2*i
-        /// Bit i of X -> Bit 2*i + 1
+        /// Generalized PowerVR Morton unswizzle supporting both square (e.g. 256x256)
+        /// and rectangular (e.g. 256x512, 512x256, 1024x512, 64x128) texture layouts.
         /// </summary>
-        private static int UntwiddlePVR(int x, int y)
+        public static int UntwiddlePVR(int x, int y, int width, int height)
+        {
+            if (width == height)
+            {
+                return UntwiddleSquare(x, y);
+            }
+
+            if (width > height)
+            {
+                int blockSize = height;
+                int blockIdx = x / blockSize;
+                int localX = x % blockSize;
+                return (blockIdx * (blockSize * blockSize)) + UntwiddleSquare(localX, y);
+            }
+            else
+            {
+                int blockSize = width;
+                int blockIdx = y / blockSize;
+                int localY = y % blockSize;
+                return (blockIdx * (blockSize * blockSize)) + UntwiddleSquare(x, localY);
+            }
+        }
+
+        /// <summary>
+        /// Square PowerVR Morton interleave:
+        /// Bit i of Y -> Bit 2*i (even bits)
+        /// Bit i of X -> Bit 2*i + 1 (odd bits)
+        /// </summary>
+        private static int UntwiddleSquare(int x, int y)
         {
             int res = 0;
             for (int i = 0; i < 16; i++)
@@ -188,7 +251,7 @@ namespace UnityNinja.IO
             return res;
         }
 
-        private static Color32 DecodePixel(ushort val, PVRColorFormat fmt)
+        private static Color32 DecodePixel16(ushort val, PVRColorFormat fmt)
         {
             switch (fmt)
             {
@@ -214,6 +277,13 @@ namespace UnityNinja.IO
                     byte g = (byte)(((val >> 4) & 0x0F) * 0x11);
                     byte b = (byte)((val & 0x0F) * 0x11);
                     return new Color32(r, g, b, a);
+                }
+                case PVRColorFormat.RGB555:
+                {
+                    byte r = (byte)(((val >> 10) & 0x1F) * 255 / 31);
+                    byte g = (byte)(((val >> 5) & 0x1F) * 255 / 31);
+                    byte b = (byte)((val & 0x1F) * 255 / 31);
+                    return new Color32(r, g, b, 255);
                 }
                 default:
                 {
