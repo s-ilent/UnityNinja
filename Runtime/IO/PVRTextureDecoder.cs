@@ -75,7 +75,7 @@ namespace UnityNinja.IO
                 case PVRDataFormat.VQ_Mipmapped:
                 case PVRDataFormat.SmallVQ:
                 case PVRDataFormat.SmallVQ_Mipmapped:
-                    DecodeVQ(pvrBytes, pixelDataOffset, width, height, colorFormat, pixels);
+                    DecodeVQ(pvrBytes, pixelDataOffset, width, height, colorFormat, dataFormat, pixels);
                     break;
 
                 case PVRDataFormat.SquareTwiddled:
@@ -86,7 +86,7 @@ namespace UnityNinja.IO
                 case PVRDataFormat.CLUT4_Twiddled:
                 case PVRDataFormat.CLUT8_Twiddled:
                 default:
-                    DecodeTwiddled(pvrBytes, pixelDataOffset, width, height, colorFormat, pixels);
+                    DecodeTwiddled(pvrBytes, pixelDataOffset, width, height, colorFormat, dataFormat, pixels);
                     break;
             }
 
@@ -132,16 +132,33 @@ namespace UnityNinja.IO
             }
         }
 
-        private static void DecodeTwiddled(byte[] data, int offset, int width, int height, PVRColorFormat colorFormat, Color32[] output)
+        private static void DecodeTwiddled(byte[] data, int offset, int width, int height, PVRColorFormat colorFormat, PVRDataFormat dataFormat, Color32[] output)
         {
             int bpp = (colorFormat == PVRColorFormat.ARGB8888) ? 4 : 2;
+
+            bool isMipmapped = (dataFormat is PVRDataFormat.SquareTwiddledMipmapped or PVRDataFormat.SquareTwiddledMipmappedAlt);
+
+            int skipPixels = 0;
+            if (isMipmapped)
+            {
+                int sW = 1, sH = 1;
+                while (sW < width || sH < height)
+                {
+                    skipPixels += sW * sH;
+                    if (sW < width) sW <<= 1;
+                    if (sH < height) sH <<= 1;
+                }
+            }
+
+            int pixelDataStart = offset + skipPixels * bpp;
+
             for (int y = 0; y < height; y++)
             {
                 int rowStart = (height - 1 - y) * width;
                 for (int x = 0; x < width; x++)
                 {
                     int morton = UntwiddlePVR(x, y, width, height);
-                    int cursor = offset + morton * bpp;
+                    int cursor = pixelDataStart + morton * bpp;
                     if (cursor + bpp <= data.Length)
                     {
                         if (bpp == 4)
@@ -162,23 +179,50 @@ namespace UnityNinja.IO
             }
         }
 
-        private static void DecodeVQ(byte[] data, int offset, int width, int height, PVRColorFormat colorFormat, Color32[] output)
+        private static void DecodeVQ(byte[] data, int offset, int width, int height, PVRColorFormat colorFormat, PVRDataFormat dataFormat, Color32[] output)
         {
-            int codebookOffset = offset;
-            int indicesOffset = offset + 2048;
+            int numCodebookEntries = 256;
+            if (dataFormat is PVRDataFormat.SmallVQ or PVRDataFormat.SmallVQ_Mipmapped)
+            {
+                int maxDim = Math.Max(width, height);
+                if (maxDim <= 16) numCodebookEntries = 32;
+                else if (maxDim <= 32) numCodebookEntries = 64;
+                else if (maxDim <= 64) numCodebookEntries = 128;
+                else numCodebookEntries = 256;
+            }
 
-            Color32[] codebook = new Color32[256 * 4];
+            int codebookByteSize = numCodebookEntries * 4 * 2;
+            int codebookOffset = offset;
+
+            bool isMipmapped = (dataFormat is PVRDataFormat.VQ_Mipmapped or PVRDataFormat.SmallVQ_Mipmapped);
+
+            int skipMipmapIndices = 0;
+            if (isMipmapped)
+            {
+                int sW = 1, sH = 1;
+                while (sW < width || sH < height)
+                {
+                    int blocks = Math.Max(1, sW / 2) * Math.Max(1, sH / 2);
+                    skipMipmapIndices += blocks;
+                    if (sW < width) sW <<= 1;
+                    if (sH < height) sH <<= 1;
+                }
+            }
+
+            int indicesOffset = offset + codebookByteSize + skipMipmapIndices;
+
+            Color32[] codebook = new Color32[numCodebookEntries * 4];
             int cbCursor = codebookOffset;
 
-            for (int i = 0; i < 256 * 4 && cbCursor + 2 <= data.Length; i++)
+            for (int i = 0; i < numCodebookEntries * 4 && cbCursor + 2 <= data.Length; i++)
             {
                 ushort raw = (ushort)(data[cbCursor] | (data[cbCursor + 1] << 8));
                 cbCursor += 2;
                 codebook[i] = DecodePixel16(raw, colorFormat);
             }
 
-            int blocksW = width / 2;
-            int blocksH = height / 2;
+            int blocksW = Math.Max(1, width / 2);
+            int blocksH = Math.Max(1, height / 2);
 
             for (int by = 0; by < blocksH; by++)
             {
@@ -188,7 +232,7 @@ namespace UnityNinja.IO
                     int idxPos = indicesOffset + morton;
                     if (idxPos >= data.Length) continue;
 
-                    int codebookIdx = data[idxPos] * 4;
+                    int codebookIdx = (data[idxPos] % numCodebookEntries) * 4;
 
                     int px = bx * 2;
                     int py = (blocksH - 1 - by) * 2;
@@ -209,10 +253,6 @@ namespace UnityNinja.IO
             }
         }
 
-        /// <summary>
-        /// Generalized PowerVR Morton unswizzle supporting both square (e.g. 256x256)
-        /// and rectangular (e.g. 256x512, 512x256, 1024x512, 64x128) texture layouts.
-        /// </summary>
         public static int UntwiddlePVR(int x, int y, int width, int height)
         {
             if (width == height)
@@ -236,11 +276,6 @@ namespace UnityNinja.IO
             }
         }
 
-        /// <summary>
-        /// Square PowerVR Morton interleave:
-        /// Bit i of Y -> Bit 2*i (even bits)
-        /// Bit i of X -> Bit 2*i + 1 (odd bits)
-        /// </summary>
         private static int UntwiddleSquare(int x, int y)
         {
             int res = 0;
@@ -283,6 +318,23 @@ namespace UnityNinja.IO
                     byte r = (byte)(((val >> 10) & 0x1F) * 255 / 31);
                     byte g = (byte)(((val >> 5) & 0x1F) * 255 / 31);
                     byte b = (byte)((val & 0x1F) * 255 / 31);
+                    return new Color32(r, g, b, 255);
+                }
+                case PVRColorFormat.BumpMap:
+                {
+                    byte angleS = (byte)((val >> 8) & 0xFF);
+                    byte angleR = (byte)(val & 0xFF);
+
+                    double radS = angleS * (2.0 * Math.PI / 255.0);
+                    double radR = angleR * (0.5 * Math.PI / 255.0);
+
+                    float nx = (float)(Math.Cos(radR) * Math.Sin(radS));
+                    float ny = (float)(Math.Cos(radR) * Math.Cos(radS));
+                    float nz = (float)Math.Sin(radR);
+
+                    byte r = (byte)Mathf.Clamp((nx * 0.5f + 0.5f) * 255.0f, 0f, 255f);
+                    byte g = (byte)Mathf.Clamp((ny * 0.5f + 0.5f) * 255.0f, 0f, 255f);
+                    byte b = (byte)Mathf.Clamp((nz * 0.5f + 0.5f) * 255.0f, 0f, 255f);
                     return new Color32(r, g, b, 255);
                 }
                 default:
